@@ -1,4 +1,5 @@
 from data import get_5m_data
+
 print("=" * 60)
 print("ST5 — TEST 5M DATA")
 print("=" * 60)
@@ -8,7 +9,7 @@ try:
     df = get_5m_data(ticker, days=30)
     if df.empty:
         print("\n❌ KHÔNG CÓ DỮ LIỆU")
-else:
+    else:
         print("\n✅ CÓ DỮ LIỆU")
         print(f"\nSố nến: {len(df):,}")
         print(f"Từ: {df['Date'].min()}")
