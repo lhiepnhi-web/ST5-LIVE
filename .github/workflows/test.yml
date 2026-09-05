@@ -22,5 +22,4 @@ jobs:
 
       - name: Download CORE26 5M
         run: |
-          cd src
-          python download_core26.py 
+          PYTHONPATH=. python src/download_core26.py
