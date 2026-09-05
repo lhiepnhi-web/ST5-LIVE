@@ -11,7 +11,6 @@ print(f"\nĐang lấy dữ liệu 5M: {ticker}")
 
 try:
     df = get_5m_data(ticker, days=30)
-
     if df.empty:
         print("\n❌ KHÔNG CÓ DỮ LIỆU")
     else:
