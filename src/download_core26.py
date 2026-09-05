@@ -29,7 +29,6 @@ for i, ticker in enumerate(CORE26, 1):
             failed.append(ticker)
             continue
 
-        # Tự động nhận diện cột chứa thời gian/ngày tháng để tránh lỗi KeyError
         date_col = None
         for col in ['Date', 'date', 'Timestamp', 'timestamp', 'Datetime', 'datetime']:
             if col in df.columns:
@@ -41,7 +40,6 @@ for i, ticker in enumerate(CORE26, 1):
             max_date = df[date_col].max()
             index_flag = False
         else:
-            # Trường hợp mốc thời gian nằm ở Index của DataFrame
             min_date = df.index.min()
             max_date = df.index.max()
             index_flag = True
