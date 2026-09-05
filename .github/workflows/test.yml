@@ -1,10 +1,18 @@
-name: ST5 LIVE TEST
+name: ST5 LIVE
 
 on:
   workflow_dispatch:
 
+  schedule:
+    - cron: "*/5 2-4 * * 1-5"
+    - cron: "*/5 6-7 * * 1-5"
+
+concurrency:
+  group: st5-live
+  cancel-in-progress: false
+
 jobs:
-  run-st5:
+  live:
     runs-on: ubuntu-latest
 
     steps:
@@ -20,6 +28,28 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Run ST5
+      - name: Download CORE26 5M
         run: |
-          PYTHONPATH=. python src/main.py
+          cd src
+          python download_core26.py
+
+      - name: Run ST5 LIVE
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          PYTHONPATH=. python src/live.py
+
+      - name: Save LIVE state
+        run: |
+          git config user.name "ST5-LIVE Bot"
+          git config user.email "st5-live@users.noreply.github.com"
+
+          git add data/live_state.json
+
+          if git diff --cached --quiet; then
+            echo "No state change"
+          else
+            git commit -m "Update ST5 LIVE state"
+            git push
+          fi
