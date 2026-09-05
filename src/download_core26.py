@@ -59,7 +59,7 @@ for i, ticker in enumerate(CORE26, 1):
         print(f"   File   : {output_file}")
 
         success.append(ticker)
-        time.sleep(1)
+        time.sleep(4)
 
     except Exception as e:
         print(f"❌ {ticker}: LỖI")
