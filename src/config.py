@@ -5,4 +5,5 @@ CORE26 = [
     "VTP", "LPB", "BFC", "SHS", "VIB",
     "VND", "MBS", "VGC", "PVD", "VSC",
     "NAF", "MCH"
- ]
+]
+ 
