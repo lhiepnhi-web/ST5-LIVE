@@ -31,7 +31,7 @@ jobs:
           ls -la src
 
           echo "=== CHECK LIVE.PY ==="
-          test -f src/live.py
+          test -f src/Live.py
           echo "src/live.py FOUND"
 
       - name: Setup Python
@@ -54,7 +54,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          PYTHONPATH=src python src/live.py
+          PYTHONPATH=src python src/Live.py
 
       - name: Show LIVE state
         if: always()
