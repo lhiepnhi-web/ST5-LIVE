@@ -1,4 +1,4 @@
- CORE26 = [
+CORE26 = [
     "THD", "ACG", "VJC", "PLX", "HAG",
     "DGW", "DPM", "KDC", "CEO",
     "SSI", "DBC", "VCI", "NVL", "VPB",
