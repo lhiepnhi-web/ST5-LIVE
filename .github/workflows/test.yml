@@ -1,10 +1,10 @@
-name: ST5 Test 5M
+name: ST5 Download CORE26 5M
 
 on:
   workflow_dispatch:
 
 jobs:
-  test:
+  download:
     runs-on: ubuntu-latest
 
     steps:
@@ -20,7 +20,7 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Test SSI 5M
+      - name: Download CORE26 5M
         run: |
           cd src
-          python test_data.py 
+          python download_core26.py 
