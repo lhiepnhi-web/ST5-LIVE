@@ -1,10 +1,10 @@
-name: ST5 Download CORE26 5M
+name: ST5 LIVE TEST
 
 on:
   workflow_dispatch:
 
 jobs:
-  download:
+  run-st5:
     runs-on: ubuntu-latest
 
     steps:
@@ -20,6 +20,6 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Download CORE26 5M
+      - name: Run ST5
         run: |
-          PYTHONPATH=. python src/download_core26.py
+          PYTHONPATH=. python src/main.py
