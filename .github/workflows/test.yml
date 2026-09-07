@@ -51,12 +51,10 @@ jobs:
 
           echo "=== CHECK LIVE.PY ==="
           test -f src/Live.py
-
           echo "src/Live.py FOUND"
 
           echo "=== CHECK V1.1 ==="
           test -f src/v11_daily_engine.py
-
           echo "src/v11_daily_engine.py FOUND"
 
       # =====================================================
@@ -98,7 +96,7 @@ jobs:
           PYTHONPATH=src python src/Live.py
 
       # =====================================================
-      # RUN ST5 V1.1 DAILY — 14 SURVIVORS
+      # RUN ST5 V1.1 DAILY
       # =====================================================
 
       - name: Run ST5 V1.1 Daily
@@ -139,27 +137,35 @@ jobs:
           fi
 
       # =====================================================
-      # SAVE BOTH STATES
+      # SAVE STATES
       # =====================================================
 
       - name: Save ST5 states
         if: always()
         run: |
-          if [ ! -f data/live_state.json ] && [ ! -f data/v11_daily_state.json ]; then
-            echo "No state files to save."
-            exit 0
+          echo "=== SAVE STATES ==="
+
+          if [ -f data/live_state.json ]; then
+            git add data/live_state.json
+            echo "Added: data/live_state.json"
+          else
+            echo "Skip: data/live_state.json"
           fi
 
-          git config user.name "ST5-LIVE Bot"
-          git config user.email "st5-live-bot@users.noreply.github.com"
-
-          git add data/live_state.json
-          git add data/v11_daily_state.json
+          if [ -f data/v11_daily_state.json ]; then
+            git add data/v11_daily_state.json
+            echo "Added: data/v11_daily_state.json"
+          else
+            echo "Skip: data/v11_daily_state.json"
+          fi
 
           if git diff --cached --quiet; then
             echo "No state changes."
             exit 0
           fi
+
+          git config user.name "ST5-LIVE Bot"
+          git config user.email "st5-live-bot@users.noreply.github.com"
 
           git commit -m "Update ST5 LIVE and V1.1 state"
           git push
