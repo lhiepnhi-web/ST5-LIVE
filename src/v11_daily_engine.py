@@ -5,7 +5,34 @@ import pandas as pd
 import numpy as np
 
 # ============================================================
-# ST5 — V1.1 DAILY ENGINE
+# ST5 — V1.1 DAILY LIVE ENGINE
+# ============================================================
+# Mục tiêu:
+# - KHÔNG chờ Daily đóng cửa
+# - Dùng Daily candle ĐANG HÌNH THÀNH trong phiên
+# - Mỗi lần workflow chạy -> kiểm tra lại 4 điều kiện
+#
+# FROZEN V1.1:
+#   Volume Ratio > 1
+#   MACD Histogram > 0
+#   ROC10 > 2
+#   ADX14 > 30
+#
+# State:
+#   FALSE -> TRUE  = BUY
+#   TRUE  -> FALSE  = EXIT
+#   TRUE  -> TRUE   = không báo
+#   FALSE -> FALSE  = không báo
+#
+# Không TP
+# Không SL
+# Không Max Hold
+# Không sửa MSR Live.py
+# ============================================================
+
+
+# ============================================================
+# ROOT
 # ============================================================
 
 ROOT_DIR = os.path.abspath(
@@ -17,11 +44,16 @@ ROOT_DIR = os.path.abspath(
 
 sys.path.insert(0, ROOT_DIR)
 
+
+# ============================================================
+# DATA SOURCE
+# ============================================================
+
 from vnstock import Quote
 
 
 # ============================================================
-# CONFIG — FROZEN V1.1
+# V1.1 SURVIVOR UNIVERSE — FROZEN
 # ============================================================
 
 TICKERS = [
@@ -41,14 +73,22 @@ TICKERS = [
     "VPB",
 ]
 
+
+# ============================================================
+# STATE
+# ============================================================
+
 STATE_FILE = os.path.join(
     ROOT_DIR,
     "data",
     "v11_daily_state.json"
 )
 
-# Cần đủ dữ liệu cho:
-# EMA26 + MACD signal + ROC10 + ADX14 + Volume MA20
+
+# ============================================================
+# DAILY LOOKBACK
+# ============================================================
+
 LOOKBACK_DAYS = 180
 
 
@@ -65,11 +105,11 @@ TELEGRAM_CHAT_ID = os.getenv(
 )
 
 
+# ============================================================
+# TELEGRAM
+# ============================================================
+
 def send_telegram(message):
-    """
-    Gửi Telegram.
-    Không làm engine chết nếu Telegram lỗi.
-    """
 
     if not TELEGRAM_BOT_TOKEN:
         print("⚠️ TELEGRAM_BOT_TOKEN chưa có")
@@ -80,6 +120,7 @@ def send_telegram(message):
         return False
 
     try:
+
         import requests
 
         url = (
@@ -89,7 +130,7 @@ def send_telegram(message):
 
         payload = {
             "chat_id": TELEGRAM_CHAT_ID,
-            "text": message,
+            "text": message
         }
 
         r = requests.post(
@@ -111,6 +152,7 @@ def send_telegram(message):
         return False
 
     except Exception as e:
+
         print(
             "❌ Telegram exception:",
             type(e).__name__,
@@ -121,7 +163,7 @@ def send_telegram(message):
 
 
 # ============================================================
-# LOAD STATE
+# STATE LOAD
 # ============================================================
 
 def load_state():
@@ -135,17 +177,20 @@ def load_state():
         return {}
 
     try:
+
         with open(
             STATE_FILE,
             "r",
             encoding="utf-8"
         ) as f:
+
             data = json.load(f)
 
         if isinstance(data, dict):
             return data
 
     except Exception as e:
+
         print(
             "⚠️ Không đọc được state:",
             type(e).__name__,
@@ -154,6 +199,10 @@ def load_state():
 
     return {}
 
+
+# ============================================================
+# STATE SAVE
+# ============================================================
 
 def save_state(state):
 
@@ -169,6 +218,7 @@ def save_state(state):
         "w",
         encoding="utf-8"
     ) as f:
+
         json.dump(
             state,
             f,
@@ -183,21 +233,20 @@ def save_state(state):
 
 
 # ============================================================
-# LOAD DAILY DATA — KBS
+# DOWNLOAD DAILY DATA
 # ============================================================
 
 def get_daily_data(ticker):
 
     print(
-        f"   Download DAILY {ticker} "
-        f"from KBS..."
+        f"   Download DAILY {ticker} from KBS..."
     )
 
     end = pd.Timestamp.now()
 
     start = (
-        end -
-        pd.Timedelta(
+        end
+        - pd.Timedelta(
             days=LOOKBACK_DAYS
         )
     )
@@ -216,16 +265,21 @@ def get_daily_data(ticker):
     if df is None or df.empty:
         return pd.DataFrame()
 
+    # --------------------------------------------------------
     # Normalize columns
+    # --------------------------------------------------------
+
     df.columns = [
         str(c).strip().lower()
         for c in df.columns
     ]
 
     rename = {
+
         "time": "Date",
         "datetime": "Date",
         "date": "Date",
+
         "open": "Open",
         "high": "High",
         "low": "Low",
@@ -243,14 +297,20 @@ def get_daily_data(ticker):
         "High",
         "Low",
         "Close",
-        "Volume",
+        "Volume"
     ]
 
     for col in required:
+
         if col not in df.columns:
+
             raise ValueError(
                 f"{ticker}: thiếu cột {col}"
             )
+
+    # --------------------------------------------------------
+    # Convert
+    # --------------------------------------------------------
 
     df["Date"] = pd.to_datetime(
         df["Date"],
@@ -258,6 +318,7 @@ def get_daily_data(ticker):
     )
 
     for col in required[1:]:
+
         df[col] = pd.to_numeric(
             df[col],
             errors="coerce"
@@ -275,9 +336,11 @@ def get_daily_data(ticker):
         subset=["Date"]
     )
 
-    return df.reset_index(
+    df = df.reset_index(
         drop=True
     )
+
+    return df
 
 
 # ============================================================
@@ -289,8 +352,7 @@ def calculate_indicators(df):
     df = df.copy()
 
     # --------------------------------------------------------
-    # VOLUME RATIO
-    # Volume Ratio = Volume / MA20 Volume
+    # Volume Ratio
     # --------------------------------------------------------
 
     df["Volume_MA20"] = (
@@ -300,14 +362,12 @@ def calculate_indicators(df):
     )
 
     df["Volume_Ratio"] = (
-        df["Volume"] /
-        df["Volume_MA20"]
+        df["Volume"]
+        / df["Volume_MA20"]
     )
 
     # --------------------------------------------------------
     # MACD
-    # EMA12 - EMA26
-    # Histogram = MACD - Signal
     # --------------------------------------------------------
 
     ema12 = (
@@ -342,8 +402,8 @@ def calculate_indicators(df):
     )
 
     df["MACD_Hist"] = (
-        df["MACD"] -
-        df["MACD_Signal"]
+        df["MACD"]
+        - df["MACD_Signal"]
     )
 
     # --------------------------------------------------------
@@ -352,14 +412,13 @@ def calculate_indicators(df):
 
     df["ROC10"] = (
         (
-            df["Close"] /
-            df["Close"].shift(10)
+            df["Close"]
+            / df["Close"].shift(10)
         ) - 1
     ) * 100
 
     # --------------------------------------------------------
-    # ADX14
-    # Wilder-style calculation
+    # TR
     # --------------------------------------------------------
 
     high = df["High"]
@@ -387,20 +446,22 @@ def calculate_indicators(df):
         axis=1
     ).max(axis=1)
 
+    # --------------------------------------------------------
+    # Directional Movement
+    # --------------------------------------------------------
+
     up_move = (
-        high -
-        high.shift(1)
+        high - high.shift(1)
     )
 
     down_move = (
-        low.shift(1) -
-        low
+        low.shift(1) - low
     )
 
     plus_dm = np.where(
         (
-            (up_move > down_move) &
-            (up_move > 0)
+            (up_move > down_move)
+            & (up_move > 0)
         ),
         up_move,
         0.0
@@ -408,8 +469,8 @@ def calculate_indicators(df):
 
     minus_dm = np.where(
         (
-            (down_move > up_move) &
-            (down_move > 0)
+            (down_move > up_move)
+            & (down_move > 0)
         ),
         down_move,
         0.0
@@ -424,6 +485,10 @@ def calculate_indicators(df):
         minus_dm,
         index=df.index
     )
+
+    # --------------------------------------------------------
+    # Wilder-style smoothing
+    # --------------------------------------------------------
 
     tr14 = (
         df["TR"]
@@ -453,29 +518,29 @@ def calculate_indicators(df):
     )
 
     df["PLUS_DI14"] = (
-        100 *
-        plus_dm14 /
-        tr14
+        100
+        * plus_dm14
+        / tr14
     )
 
     df["MINUS_DI14"] = (
-        100 *
-        minus_dm14 /
-        tr14
+        100
+        * minus_dm14
+        / tr14
     )
 
     di_sum = (
-        df["PLUS_DI14"] +
-        df["MINUS_DI14"]
+        df["PLUS_DI14"]
+        + df["MINUS_DI14"]
     )
 
     df["DX"] = np.where(
         di_sum != 0,
-        100 *
-        (
+        100
+        * (
             (
-                df["PLUS_DI14"] -
-                df["MINUS_DI14"]
+                df["PLUS_DI14"]
+                - df["MINUS_DI14"]
             ).abs()
             / di_sum
         ),
@@ -498,7 +563,7 @@ def calculate_indicators(df):
 
 
 # ============================================================
-# V1.1 LAW
+# V1.1 CONDITIONS — FROZEN
 # ============================================================
 
 def v11_conditions(row):
@@ -520,23 +585,38 @@ def v11_conditions(row):
     )
 
     all_ok = (
-        volume_ok and
-        macd_ok and
-        roc_ok and
-        adx_ok
+        volume_ok
+        and macd_ok
+        and roc_ok
+        and adx_ok
     )
 
     return {
-        "volume": bool(volume_ok),
-        "macd": bool(macd_ok),
-        "roc": bool(roc_ok),
-        "adx": bool(adx_ok),
-        "all": bool(all_ok),
+
+        "volume": bool(
+            volume_ok
+        ),
+
+        "macd": bool(
+            macd_ok
+        ),
+
+        "roc": bool(
+            roc_ok
+        ),
+
+        "adx": bool(
+            adx_ok
+        ),
+
+        "all": bool(
+            all_ok
+        ),
     }
 
 
 # ============================================================
-# FORMAT TELEGRAM
+# BUY MESSAGE
 # ============================================================
 
 def format_buy_message(
@@ -546,17 +626,37 @@ def format_buy_message(
 ):
 
     return (
+
         "🟢 ST5 V1.1 — BUY\n\n"
+
         f"Mã: {ticker}\n"
         f"Ngày: {trade_date}\n"
-        f"Giá đóng cửa: {row['Close']:.2f}\n\n"
-        "Điều kiện:\n"
-        f"Volume Ratio: {row['Volume_Ratio']:.2f} > 1 ✅\n"
-        f"MACD Histogram: {row['MACD_Hist']:.4f} > 0 ✅\n"
-        f"ROC10: {row['ROC10']:.2f} > 2 ✅\n"
-        f"ADX14: {row['ADX14']:.2f} > 30 ✅"
+
+        f"Giá hiện tại: "
+        f"{row['Close']:.2f}\n\n"
+
+        "4/4 điều kiện PASS:\n"
+
+        f"Volume Ratio: "
+        f"{row['Volume_Ratio']:.2f} > 1 ✅\n"
+
+        f"MACD Histogram: "
+        f"{row['MACD_Hist']:.4f} > 0 ✅\n"
+
+        f"ROC10: "
+        f"{row['ROC10']:.2f} > 2 ✅\n"
+
+        f"ADX14: "
+        f"{row['ADX14']:.2f} > 30 ✅\n\n"
+
+        "⚡ Tín hiệu trong phiên — "
+        "không chờ Daily đóng cửa."
     )
 
+
+# ============================================================
+# EXIT MESSAGE
+# ============================================================
 
 def format_exit_message(
     ticker,
@@ -565,19 +665,34 @@ def format_exit_message(
 ):
 
     return (
+
         "🔴 ST5 V1.1 — EXIT\n\n"
+
         f"Mã: {ticker}\n"
         f"Ngày: {trade_date}\n"
-        f"Giá đóng cửa: {row['Close']:.2f}\n\n"
-        "V1.1: ít nhất 1 điều kiện đã FALSE.\n"
-        f"Volume Ratio: {row['Volume_Ratio']:.2f} "
+
+        f"Giá hiện tại: "
+        f"{row['Close']:.2f}\n\n"
+
+        "V1.1: ít nhất 1 điều kiện FALSE.\n"
+
+        f"Volume Ratio: "
+        f"{row['Volume_Ratio']:.2f} "
         f"{'✅' if row['Volume_Ratio'] > 1 else '❌'}\n"
-        f"MACD Histogram: {row['MACD_Hist']:.4f} "
+
+        f"MACD Histogram: "
+        f"{row['MACD_Hist']:.4f} "
         f"{'✅' if row['MACD_Hist'] > 0 else '❌'}\n"
-        f"ROC10: {row['ROC10']:.2f} "
+
+        f"ROC10: "
+        f"{row['ROC10']:.2f} "
         f"{'✅' if row['ROC10'] > 2 else '❌'}\n"
-        f"ADX14: {row['ADX14']:.2f} "
-        f"{'✅' if row['ADX14'] > 30 else '❌'}"
+
+        f"ADX14: "
+        f"{row['ADX14']:.2f} "
+        f"{'✅' if row['ADX14'] > 30 else '❌'}\n\n"
+
+        "⚡ EXIT trong phiên."
     )
 
 
@@ -596,23 +711,37 @@ def process_ticker(
 
     try:
 
+        # ----------------------------------------------------
+        # Download current Daily candle
+        # ----------------------------------------------------
+
         df = get_daily_data(
             ticker
         )
 
         if df.empty:
+
             print(
                 f"❌ {ticker}: "
                 "không có daily data"
             )
+
             return
+
+        # ----------------------------------------------------
+        # Calculate indicators
+        # ----------------------------------------------------
 
         df = calculate_indicators(
             df
         )
 
         # ----------------------------------------------------
-        # Chỉ dùng cây DAILY cuối cùng.
+        # IMPORTANT:
+        # LẤY CÂY DAILY CUỐI CÙNG
+        #
+        # Đây là cây Daily đang hình thành
+        # trong phiên nếu thị trường đang mở.
         # ----------------------------------------------------
 
         row = df.iloc[-1]
@@ -620,25 +749,30 @@ def process_ticker(
         trade_date = (
             pd.Timestamp(
                 row["Date"]
+            ).strftime(
+                "%Y-%m-%d"
             )
-            .strftime("%Y-%m-%d")
         )
 
-        conditions = v11_conditions(
-            row
+        conditions = (
+            v11_conditions(row)
         )
 
-        current_signal = conditions[
-            "all"
-        ]
+        current_signal = (
+            conditions["all"]
+        )
+
+        # ----------------------------------------------------
+        # Previous state
+        # ----------------------------------------------------
 
         previous = state.get(
             ticker,
             {}
         )
 
-        previous_date = previous.get(
-            "date"
+        previous_date = (
+            previous.get("date")
         )
 
         previous_signal = bool(
@@ -648,161 +782,288 @@ def process_ticker(
             )
         )
 
+        # ----------------------------------------------------
+        # PRINT
+        # ----------------------------------------------------
+
         print(
-            f"Date       : {trade_date}"
+            f"Date        : "
+            f"{trade_date}"
         )
 
         print(
-            f"Close      : {row['Close']:.2f}"
+            f"Close       : "
+            f"{row['Close']:.2f}"
         )
 
         print(
-            f"VolumeRatio: "
+            f"VolumeRatio : "
             f"{row['Volume_Ratio']:.4f}"
         )
 
         print(
-            f"MACD Hist  : "
+            f"MACD Hist   : "
             f"{row['MACD_Hist']:.6f}"
         )
 
         print(
-            f"ROC10      : "
+            f"ROC10       : "
             f"{row['ROC10']:.4f}"
         )
 
         print(
-            f"ADX14      : "
+            f"ADX14       : "
             f"{row['ADX14']:.4f}"
         )
 
         print()
-        print(
-            "V1.1:"
-        )
+
+        print("V1.1 CURRENT CANDLE:")
 
         print(
-            f"  Volume > 1 : "
+            "  Volume > 1 : "
             f"{'PASS' if conditions['volume'] else 'FAIL'}"
         )
 
         print(
-            f"  MACD > 0   : "
+            "  MACD > 0   : "
             f"{'PASS' if conditions['macd'] else 'FAIL'}"
         )
 
         print(
-            f"  ROC10 > 2  : "
+            "  ROC10 > 2  : "
             f"{'PASS' if conditions['roc'] else 'FAIL'}"
         )
 
         print(
-            f"  ADX14 > 30 : "
+            "  ADX14 > 30 : "
             f"{'PASS' if conditions['adx'] else 'FAIL'}"
         )
 
         print()
+
         print(
-            f"V1.1 SIGNAL : "
+            "V1.1 SIGNAL : "
             f"{'TRUE' if current_signal else 'FALSE'}"
         )
 
         # ----------------------------------------------------
-        # QUAN TRỌNG:
+        # SAME CANDLE
         #
-        # Nếu cùng một ngày đã xử lý rồi,
-        # không gửi lại BUY/EXIT.
+        # Không gửi lại tín hiệu nếu workflow chạy
+        # nhiều lần trên cùng một Daily candle.
         # ----------------------------------------------------
 
         if previous_date == trade_date:
 
-            print(
-                "⏭ Đã xử lý ngày này."
-            )
+            if previous_signal == current_signal:
 
-            return
+                print(
+                    "⏭ Cùng Daily candle, "
+                    "không có thay đổi tín hiệu."
+                )
+
+                # Cập nhật giá trị hiện tại
+                # nhưng KHÔNG gửi Telegram.
+
+                state[ticker] = {
+
+                    "date": trade_date,
+
+                    "signal": bool(
+                        current_signal
+                    ),
+
+                    "close": float(
+                        row["Close"]
+                    ),
+
+                    "volume_ratio": float(
+                        row["Volume_Ratio"]
+                    ),
+
+                    "macd_hist": float(
+                        row["MACD_Hist"]
+                    ),
+
+                    "roc10": float(
+                        row["ROC10"]
+                    ),
+
+                    "adx14": float(
+                        row["ADX14"]
+                    ),
+                }
+
+                return
+
+            # ------------------------------------------------
+            # SAME DAY:
+            #
+            # FALSE -> TRUE = BUY
+            # TRUE  -> FALSE = EXIT
+            # ------------------------------------------------
+
+            if (
+                not previous_signal
+                and current_signal
+            ):
+
+                print(
+                    f"🟢 BUY SIGNAL: "
+                    f"{ticker}"
+                )
+
+                send_telegram(
+                    format_buy_message(
+                        ticker,
+                        row,
+                        trade_date
+                    )
+                )
+
+            elif (
+                previous_signal
+                and not current_signal
+            ):
+
+                print(
+                    f"🔴 EXIT SIGNAL: "
+                    f"{ticker}"
+                )
+
+                send_telegram(
+                    format_exit_message(
+                        ticker,
+                        row,
+                        trade_date
+                    )
+                )
+
+            else:
+
+                print(
+                    "ℹ️ Không có tín hiệu mới."
+                )
 
         # ----------------------------------------------------
-        # BUY:
-        # FALSE -> TRUE
+        # NEW DAILY CANDLE
         # ----------------------------------------------------
-
-        if (
-            not previous_signal
-            and current_signal
-        ):
-
-            print(
-                f"🟢 BUY SIGNAL: {ticker}"
-            )
-
-            message = format_buy_message(
-                ticker,
-                row,
-                trade_date
-            )
-
-            send_telegram(
-                message
-            )
-
-        # ----------------------------------------------------
-        # EXIT:
-        # TRUE -> FALSE
-        #
-        # Theo luật V1.1:
-        # exit bắt đầu từ phiên tiếp theo sau BUY.
-        #
-        # State chỉ chuyển BUY ở phiên trước,
-        # nên khi ngày mới FALSE -> EXIT.
-        # ----------------------------------------------------
-
-        elif (
-            previous_signal
-            and not current_signal
-        ):
-
-            print(
-                f"🔴 EXIT SIGNAL: {ticker}"
-            )
-
-            message = format_exit_message(
-                ticker,
-                row,
-                trade_date
-            )
-
-            send_telegram(
-                message
-            )
 
         else:
 
             print(
-                "ℹ️ Không có tín hiệu mới."
+                "🆕 Daily candle mới."
             )
 
+            # ------------------------------------------------
+            # Nếu không có state trước đó:
+            #
+            # Chỉ báo BUY nếu hiện tại TRUE.
+            # ------------------------------------------------
+
+            if not previous:
+
+                if current_signal:
+
+                    print(
+                        f"🟢 BUY SIGNAL: "
+                        f"{ticker}"
+                    )
+
+                    send_telegram(
+                        format_buy_message(
+                            ticker,
+                            row,
+                            trade_date
+                        )
+                    )
+
+                else:
+
+                    print(
+                        "ℹ️ Không có tín hiệu mới."
+                    )
+
+            # ------------------------------------------------
+            # Có state ngày trước:
+            #
+            # FALSE -> TRUE = BUY
+            # TRUE  -> FALSE = EXIT
+            # ------------------------------------------------
+
+            else:
+
+                if (
+                    not previous_signal
+                    and current_signal
+                ):
+
+                    print(
+                        f"🟢 BUY SIGNAL: "
+                        f"{ticker}"
+                    )
+
+                    send_telegram(
+                        format_buy_message(
+                            ticker,
+                            row,
+                            trade_date
+                        )
+                    )
+
+                elif (
+                    previous_signal
+                    and not current_signal
+                ):
+
+                    print(
+                        f"🔴 EXIT SIGNAL: "
+                        f"{ticker}"
+                    )
+
+                    send_telegram(
+                        format_exit_message(
+                            ticker,
+                            row,
+                            trade_date
+                        )
+                    )
+
+                else:
+
+                    print(
+                        "ℹ️ Không có tín hiệu mới."
+                    )
+
         # ----------------------------------------------------
-        # SAVE STATE
+        # SAVE CURRENT STATE
         # ----------------------------------------------------
 
         state[ticker] = {
+
             "date": trade_date,
+
             "signal": bool(
                 current_signal
             ),
+
             "close": float(
                 row["Close"]
             ),
+
             "volume_ratio": float(
                 row["Volume_Ratio"]
             ),
+
             "macd_hist": float(
                 row["MACD_Hist"]
             ),
+
             "roc10": float(
                 row["ROC10"]
             ),
+
             "adx14": float(
                 row["ADX14"]
             ),
@@ -826,12 +1087,16 @@ def process_ticker(
 def main():
 
     print()
+
     print("=" * 70)
     print(
-        "ST5 — V1.1 DAILY ENGINE"
+        "ST5 — V1.1 DAILY LIVE ENGINE"
     )
     print(
         "14 SURVIVOR TICKERS"
+    )
+    print(
+        "INTRADAY CURRENT DAILY CANDLE"
     )
     print("=" * 70)
 
@@ -844,6 +1109,7 @@ def main():
     )
 
     print()
+
     print(
         "FROZEN V1.1:"
     )
@@ -865,6 +1131,29 @@ def main():
     )
 
     print()
+
+    print(
+        "MODE:"
+    )
+
+    print(
+        "⚡ Dùng Daily candle đang hình thành."
+    )
+
+    print(
+        "⚡ Không chờ Daily đóng cửa."
+    )
+
+    print(
+        "⚡ FALSE → TRUE = BUY."
+    )
+
+    print(
+        "⚡ TRUE → FALSE = EXIT."
+    )
+
+    print()
+
     print(
         f"Số mã: {len(TICKERS)}"
     )
@@ -883,16 +1172,23 @@ def main():
     )
 
     print()
+
     print("=" * 70)
     print(
-        "V1.1 DAILY ENGINE FINISHED"
+        "V1.1 DAILY LIVE ENGINE FINISHED"
     )
     print("=" * 70)
 
     print(
-        f"State saved: {STATE_FILE}"
+        f"State saved: "
+        f"{STATE_FILE}"
     )
 
+
+# ============================================================
+# RUN
+# ============================================================
 
 if __name__ == "__main__":
+
     main() 
