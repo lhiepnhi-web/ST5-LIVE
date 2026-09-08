@@ -1,174 +1,110 @@
-"""
-ST5 LIVE
-MSR STEP 5 — C4 LIVE ADAPTER
+# ============================================================
+# ST5 LIVE — MSR C4 LIVE
+# ============================================================
+# PURPOSE:
+#   MSR C4 frozen strategy
+#   - Uses historical Daily + developing Daily candle built from 5M
+#   - Intraday BUY signal
+#   - Telegram BUY only
+#   - No auto order
+#   - One BUY notification per day
+#
+# IMPORTANT:
+#   Strategy logic is NOT changed.
+#   Only live Daily data construction is changed.
+# ============================================================
 
-LIVE MODE
-
-Historical C4 engine remains unchanged.
-
-During live trading:
-    - Use the current trading day's developing daily candle.
-    - Reuse the exact C4 indicator calculation.
-    - Evaluate ENTRY_SIGNAL on the latest available candle.
-    - Send BUY only once per trading day.
-    - Never send SELL.
-    - Never place an order.
-
-Trading sessions:
-    09:15 - 11:30
-    13:00 - 14:30
-"""
-
-from __future__ import annotations
-
-import json
 import os
-import sys
-from datetime import datetime, time as dt_time
-from pathlib import Path
+import json
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
 
+import requests
 import pandas as pd
-import pytz
-from vnstock import Quote
-
-
-# ============================================================
-# PATH
-# ============================================================
-
-ROOT_DIR = Path(__file__).resolve().parent.parent
-
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-
-
-# ============================================================
-# C4 ENGINE
-# ============================================================
 
 from msr_step5_engine import add_indicators
+from live_daily_data import get_live_daily
 
 
 # ============================================================
 # CONFIG
 # ============================================================
 
-TICKER = "MSR"
+SYMBOL = "MSR"
 
-TZ = pytz.timezone(
-    "Asia/Ho_Chi_Minh"
-)
+STATE_FILE = "data/msr_live_state.json"
 
-STATE_FILE = (
-    ROOT_DIR
-    / "data"
-    / "msr_live_state.json"
-)
+VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+
+MORNING_START = time(9, 15)
+MORNING_END = time(11, 30)
+
+AFTERNOON_START = time(13, 0)
+AFTERNOON_END = time(14, 30)
 
 
 # ============================================================
 # TELEGRAM
 # ============================================================
 
-TELEGRAM_BOT_TOKEN = os.getenv(
-    "TELEGRAM_BOT_TOKEN"
-)
-
-TELEGRAM_CHAT_ID = os.getenv(
-    "TELEGRAM_CHAT_ID"
-)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 
 def send_telegram(message: str) -> bool:
 
-    if not TELEGRAM_BOT_TOKEN:
-        print(
-            "Telegram token chưa được cấu hình."
-        )
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram credentials missing.")
         return False
 
-    if not TELEGRAM_CHAT_ID:
-        print(
-            "Telegram chat ID chưa được cấu hình."
-        )
-        return False
+    url = (
+        f"https://api.telegram.org/bot"
+        f"{TELEGRAM_BOT_TOKEN}/sendMessage"
+    )
+
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+    }
 
     try:
 
-        import requests
-
-        url = (
-            "https://api.telegram.org/"
-            f"bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        )
-
         response = requests.post(
             url,
-            json={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": message,
-            },
+            json=payload,
             timeout=15,
         )
 
-        response.raise_for_status()
-
-        return True
-
-    except Exception as exc:
+        if response.ok:
+            print("Telegram sent.")
+            return True
 
         print(
-            f"Telegram error: "
-            f"{type(exc).__name__}: {exc}"
+            "Telegram failed:",
+            response.status_code,
+            response.text,
         )
 
-        return False
+    except Exception as e:
 
+        print(
+            "Telegram exception:",
+            repr(e),
+        )
 
-# ============================================================
-# TIME
-# ============================================================
-
-def now_vietnam() -> datetime:
-
-    return datetime.now(TZ)
-
-
-def in_trading_session(
-    current: datetime,
-) -> bool:
-
-    if current.weekday() >= 5:
-        return False
-
-    t = current.time()
-
-    morning = (
-        dt_time(9, 15)
-        <= t
-        <= dt_time(11, 30)
-    )
-
-    afternoon = (
-        dt_time(13, 0)
-        <= t
-        <= dt_time(14, 30)
-    )
-
-    return (
-        morning
-        or afternoon
-    )
+    return False
 
 
 # ============================================================
 # STATE
 # ============================================================
 
-def load_state() -> dict:
+def load_state():
 
-    if not STATE_FILE.exists():
-        return {}
+    if not os.path.exists(STATE_FILE):
+        return {
+            "last_buy_date": None,
+        }
 
     try:
 
@@ -180,31 +116,36 @@ def load_state() -> dict:
 
             state = json.load(f)
 
-        if isinstance(state, dict):
-            return state
+        if not isinstance(state, dict):
+            raise ValueError("Invalid state format.")
 
-    except Exception as exc:
-
-        print(
-            f"State read error: {exc}"
+        state.setdefault(
+            "last_buy_date",
+            None,
         )
 
-    return {}
+        return state
+
+    except Exception as e:
+
+        print(
+            "State load failed:",
+            repr(e),
+        )
+
+        return {
+            "last_buy_date": None,
+        }
 
 
-def save_state(
-    state: dict,
-):
+def save_state(state):
 
-    STATE_FILE.parent.mkdir(
-        parents=True,
+    os.makedirs(
+        os.path.dirname(STATE_FILE),
         exist_ok=True,
     )
 
-    temp_file = (
-        str(STATE_FILE)
-        + ".tmp"
-    )
+    temp_file = STATE_FILE + ".tmp"
 
     with open(
         temp_file,
@@ -226,380 +167,184 @@ def save_state(
 
 
 # ============================================================
-# DOWNLOAD MSR DAILY DATA
+# SESSION
 # ============================================================
 
-def load_msr_daily() -> pd.DataFrame:
+def is_trading_session(now_vn: datetime) -> bool:
 
-    print(
-        "Downloading MSR daily data from KBS..."
+    current_time = now_vn.time()
+
+    morning = (
+        MORNING_START
+        <= current_time
+        <= MORNING_END
     )
 
-    quote = Quote(
-        symbol=TICKER,
-        source="KBS",
+    afternoon = (
+        AFTERNOON_START
+        <= current_time
+        <= AFTERNOON_END
     )
 
-    df = quote.history(
-        start="2015-01-01",
-        end=datetime.now(TZ).strftime(
-            "%Y-%m-%d"
-        ),
-        interval="1D",
+    return morning or afternoon
+
+
+# ============================================================
+# LIVE DATA
+# ============================================================
+
+def load_live_daily():
+
+    today = datetime.now(VN_TZ).date()
+
+    print()
+    print("=" * 72)
+    print("MSR LIVE DAILY DATA")
+    print("=" * 72)
+
+    print("Today VN :", today)
+
+    result = get_live_daily(
+        SYMBOL,
     )
+
+    if not result.get("ok"):
+
+        error = result.get(
+            "error",
+            "unknown error",
+        )
+
+        print()
+        print("FAIL SAFE")
+        print("Reason :", error)
+
+        return None
+
+    df = result.get("data")
 
     if df is None or df.empty:
 
-        raise RuntimeError(
-            "KBS không trả dữ liệu MSR."
+        print()
+        print("FAIL SAFE")
+        print("Reason : empty live daily dataframe")
+
+        return None
+
+    # --------------------------------------------------------
+    # HARD VALIDATION
+    # --------------------------------------------------------
+
+    if not result.get("is_current_day", False):
+
+        print()
+        print("FAIL SAFE")
+        print(
+            "Reason : latest Daily candle is NOT current day"
         )
 
-    df.columns = [
-        str(c).strip().lower()
-        for c in df.columns
-    ]
+        return None
 
-    rename = {
-        "time": "Date",
-        "datetime": "Date",
-        "date": "Date",
-        "open": "Open",
-        "high": "High",
-        "low": "Low",
-        "close": "Close",
-        "volume": "Volume",
-    }
+    latest_date = pd.Timestamp(
+        df["Date"].iloc[-1]
+    ).date()
 
-    df = df.rename(
-        columns=rename
-    )
+    if latest_date != today:
 
-    required = [
-        "Date",
-        "Open",
-        "High",
-        "Low",
-        "Close",
-        "Volume",
-    ]
+        print()
+        print("FAIL SAFE")
 
-    missing = [
-        c
-        for c in required
-        if c not in df.columns
-    ]
-
-    if missing:
-
-        raise ValueError(
-            f"MSR thiếu cột: {missing}"
+        print(
+            "Latest date :",
+            latest_date,
         )
 
-    df = df[
-        required
-    ].copy()
-
-    df["Date"] = pd.to_datetime(
-        df["Date"],
-        errors="coerce",
-    )
-
-    for col in required[1:]:
-
-        df[col] = pd.to_numeric(
-            df[col],
-            errors="coerce",
+        print(
+            "Expected    :",
+            today,
         )
 
-    df = df.dropna(
-        subset=required
-    )
+        return None
 
-    df = (
-        df
-        .sort_values("Date")
-        .drop_duplicates(
-            subset=["Date"],
-            keep="last",
-        )
-        .reset_index(drop=True)
-    )
+    print()
+    print("Latest Daily :", latest_date)
 
     print(
-        f"MSR rows: {len(df)}"
-    )
-
-    print(
-        f"Latest bar: "
-        f"{df['Date'].iloc[-1]}"
+        "Current candle:",
+        "YES",
     )
 
     return df
 
 
 # ============================================================
-# NORMALIZE TODAY'S DEVELOPING DAILY BAR
+# SIGNAL
 # ============================================================
 
-def prepare_live_daily(
-    df: pd.DataFrame,
-    current: datetime,
-) -> pd.DataFrame:
-
-    today = pd.Timestamp(
-        current.date()
-    )
-
-    out = df.copy()
-
-    # --------------------------------------------------------
-    # If KBS already contains today's developing daily bar,
-    # use it directly.
-    # --------------------------------------------------------
-
-    today_rows = out[
-        out["Date"].dt.normalize()
-        == today
-    ]
-
-    if not today_rows.empty:
-
-        print(
-            "Today's developing MSR daily candle found."
-        )
-
-        return out.reset_index(
-            drop=True
-        )
-
-    # --------------------------------------------------------
-    # If provider does not return today's daily candle,
-    # we cannot manufacture a daily candle from nowhere.
-    # Keep historical data only.
-    # --------------------------------------------------------
-
-    print(
-        "Today's developing daily candle "
-        "is not available from KBS."
-    )
-
-    return out.reset_index(
-        drop=True
-    )
-
-
-# ============================================================
-# C4 LIVE SIGNAL
-# ============================================================
-
-def calculate_live_signal(
-    df: pd.DataFrame,
-    current: datetime,
-) -> dict | None:
-
-    data = prepare_live_daily(
-        df,
-        current,
-    )
-
-    if len(data) < 50:
-
-        print(
-            "MSR: insufficient history."
-        )
-
-        return None
+def calculate_live_signal(df):
 
     # --------------------------------------------------------
     # IMPORTANT:
-    # Indicator formulas come directly from C4.
+    # EXACT SAME INDICATOR ENGINE AS MSR C4
     # --------------------------------------------------------
 
     data = add_indicators(
-        data
+        df.copy()
     )
+
+    if data.empty:
+        return None
 
     latest = data.iloc[-1]
 
-    latest_date = pd.Timestamp(
-        latest["Date"]
+    required_columns = [
+        "ENTRY_SIGNAL",
+        "Volume_Ratio",
+        "MACD_HIST",
+        "ROC10",
+        "ADX14",
+        "Close",
+    ]
+
+    for col in required_columns:
+
+        if col not in data.columns:
+
+            raise ValueError(
+                f"MSR C4: missing column {col}"
+            )
+
+    signal = bool(
+        latest["ENTRY_SIGNAL"]
     )
 
     return {
-        "Date": latest_date,
-        "Close": float(
+        "date": pd.Timestamp(
+            latest["Date"]
+        ).date(),
+
+        "close": float(
             latest["Close"]
         ),
-        "ENTRY_SIGNAL": bool(
-            latest["ENTRY_SIGNAL"]
+
+        "volume_ratio": float(
+            latest["Volume_Ratio"]
         ),
-        "VOLUME_RATIO": float(
-            latest["VOLUME_RATIO"]
-        ),
-        "MACD_HIST": float(
+
+        "macd_hist": float(
             latest["MACD_HIST"]
         ),
-        "ROC10": float(
+
+        "roc10": float(
             latest["ROC10"]
         ),
-        "ADX14": float(
+
+        "adx14": float(
             latest["ADX14"]
         ),
+
+        "signal": signal,
     }
-
-
-# ============================================================
-# PROCESS MSR
-# ============================================================
-
-def process_msr(
-    current: datetime,
-    state: dict,
-) -> bool:
-
-    df = load_msr_daily()
-
-    signal = calculate_live_signal(
-        df,
-        current,
-    )
-
-    if signal is None:
-        return False
-
-    signal_date = pd.Timestamp(
-        signal["Date"]
-    ).strftime(
-        "%Y-%m-%d"
-    )
-
-    print()
-    print(
-        "========== MSR C4 LIVE =========="
-    )
-
-    print(
-        f"Candle date  : {signal_date}"
-    )
-
-    print(
-        f"Close        : "
-        f"{signal['Close']}"
-    )
-
-    print(
-        f"Volume Ratio : "
-        f"{signal['VOLUME_RATIO']:.4f}"
-    )
-
-    print(
-        f"MACD Hist    : "
-        f"{signal['MACD_HIST']:.6f}"
-    )
-
-    print(
-        f"ROC10        : "
-        f"{signal['ROC10']:.4f}"
-    )
-
-    print(
-        f"ADX14        : "
-        f"{signal['ADX14']:.4f}"
-    )
-
-    print(
-        f"ENTRY_SIGNAL : "
-        f"{signal['ENTRY_SIGNAL']}"
-    )
-
-    # --------------------------------------------------------
-    # NO BUY
-    # --------------------------------------------------------
-
-    if not signal["ENTRY_SIGNAL"]:
-
-        return False
-
-    # --------------------------------------------------------
-    # ONLY ACCEPT CURRENT TRADING DAY
-    # --------------------------------------------------------
-
-    today = current.strftime(
-        "%Y-%m-%d"
-    )
-
-    if signal_date != today:
-
-        print(
-            "MSR: signal belongs to an old candle."
-        )
-
-        return False
-
-    # --------------------------------------------------------
-    # ONE TELEGRAM BUY PER DAY
-    # --------------------------------------------------------
-
-    last_signal_date = state.get(
-        "last_entry_signal"
-    )
-
-    if last_signal_date == today:
-
-        print(
-            "MSR: today's BUY already sent."
-        )
-
-        return False
-
-    # --------------------------------------------------------
-    # TELEGRAM
-    # --------------------------------------------------------
-
-    message = (
-        "🚨 ST5 LIVE — MSR C4 BUY\n\n"
-        f"Date: {today}\n"
-        f"Close: {signal['Close']}\n\n"
-        f"Volume Ratio: "
-        f"{signal['VOLUME_RATIO']:.4f}\n"
-        f"MACD Hist: "
-        f"{signal['MACD_HIST']:.6f}\n"
-        f"ROC10: "
-        f"{signal['ROC10']:.4f}\n"
-        f"ADX14: "
-        f"{signal['ADX14']:.4f}\n\n"
-        "C4 ENTRY: 4/4 CONDITIONS PASS\n"
-        "⚠️ Paper signal — chưa tự đặt lệnh."
-    )
-
-    sent = send_telegram(
-        message
-    )
-
-    if not sent:
-        return False
-
-    # --------------------------------------------------------
-    # SAVE STATE
-    # --------------------------------------------------------
-
-    state[
-        "last_entry_signal"
-    ] = today
-
-    state[
-        "updated_at"
-    ] = current.isoformat()
-
-    save_state(
-        state
-    )
-
-    print(
-        "✅ MSR C4 BUY sent to Telegram."
-    )
-
-    return True
 
 
 # ============================================================
@@ -608,20 +353,25 @@ def process_msr(
 
 def main():
 
-    current = now_vietnam()
+    now_vn = datetime.now(VN_TZ)
 
     print()
-    print("=" * 70)
-    print("ST5 LIVE — MSR C4 LIVE")
-    print("=" * 70)
+    print("=" * 72)
+    print("ST5 LIVE — MSR C4")
+    print("=" * 72)
 
     print(
-        f"Vietnam time: {current}"
+        "VN time :",
+        now_vn.strftime(
+            "%Y-%m-%d %H:%M:%S"
+        ),
     )
 
-    if not in_trading_session(
-        current
-    ):
+    # --------------------------------------------------------
+    # SESSION GATE
+    # --------------------------------------------------------
+
+    if not is_trading_session(now_vn):
 
         print(
             "Outside trading session."
@@ -629,24 +379,169 @@ def main():
 
         return
 
-    state = load_state()
+    today = now_vn.date()
 
-    try:
+    # --------------------------------------------------------
+    # LOAD CURRENT DAILY
+    # --------------------------------------------------------
 
-        process_msr(
-            current,
-            state,
+    df = load_live_daily()
+
+    if df is None:
+
+        print(
+            "MSR LIVE STOPPED — FAIL SAFE"
         )
 
-    except Exception as exc:
+        return
+
+    # --------------------------------------------------------
+    # CALCULATE C4 SIGNAL
+    # --------------------------------------------------------
+
+    result = calculate_live_signal(
+        df
+    )
+
+    if result is None:
+
+        print(
+            "MSR signal calculation failed."
+        )
+
+        return
+
+    print()
+    print("=" * 72)
+    print("MSR C4 CURRENT SIGNAL")
+    print("=" * 72)
+
+    print(
+        "Date        :",
+        result["date"],
+    )
+
+    print(
+        "Close       :",
+        result["close"],
+    )
+
+    print(
+        "VolumeRatio :",
+        result["volume_ratio"],
+    )
+
+    print(
+        "MACD Hist   :",
+        result["macd_hist"],
+    )
+
+    print(
+        "ROC10       :",
+        result["roc10"],
+    )
+
+    print(
+        "ADX14       :",
+        result["adx14"],
+    )
+
+    print(
+        "C4 SIGNAL   :",
+        result["signal"],
+    )
+
+    # --------------------------------------------------------
+    # EXTRA SAFETY
+    # --------------------------------------------------------
+
+    if result["date"] != today:
 
         print()
         print(
-            f"❌ MSR C4 error: "
-            f"{type(exc).__name__}: {exc}"
+            "FAIL SAFE: signal date != today"
         )
 
+        return
+
+    # --------------------------------------------------------
+    # STATE
+    # --------------------------------------------------------
+
+    state = load_state()
+
+    last_buy_date = state.get(
+        "last_buy_date"
+    )
+
+    # --------------------------------------------------------
+    # BUY
+    # --------------------------------------------------------
+
+    if result["signal"]:
+
+        if last_buy_date == str(today):
+
+            print()
+            print(
+                "BUY condition TRUE."
+            )
+
+            print(
+                "Telegram BUY already sent today."
+            )
+
+            return
+
+        message = (
+            "🟢 MSR — C4 BUY\n\n"
+            f"Date: {result['date']}\n"
+            f"Close: {result['close']:.2f}\n"
+            f"Volume Ratio: {result['volume_ratio']:.4f}\n"
+            f"MACD Hist: {result['macd_hist']:.6f}\n"
+            f"ROC10: {result['roc10']:.4f}\n"
+            f"ADX14: {result['adx14']:.4f}\n\n"
+            "ENTRY:\n"
+            "Volume Ratio > 1\n"
+            "MACD Histogram > 0\n"
+            "ROC10 > 2\n"
+            "ADX14 > 30"
+        )
+
+        sent = send_telegram(
+            message
+        )
+
+        if sent:
+
+            state["last_buy_date"] = str(
+                today
+            )
+
+            save_state(
+                state
+            )
+
+            print()
+            print(
+                "BUY notification recorded."
+            )
+
+        return
+
+    # --------------------------------------------------------
+    # NO SIGNAL
+    # --------------------------------------------------------
+
+    print()
+    print(
+        "No BUY signal."
+    )
+
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
 
 if __name__ == "__main__":
-
     main()
