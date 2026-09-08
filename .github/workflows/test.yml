@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
 
   schedule:
-    # 09:15 - 11:30 Vietnam
+    # 09:15 - 11:30 Vietnam (UTC+7)
     - cron: "15-55/5 2 * * 1-5"
     - cron: "*/5 3 * * 1-5"
     - cron: "0-30/5 4 * * 1-5"
 
-    # 13:00 - 14:30 Vietnam
+    # 13:00 - 14:30 Vietnam (UTC+7)
     - cron: "*/5 6 * * 1-5"
     - cron: "0-30/5 7 * * 1-5"
 
@@ -21,7 +21,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+
   live:
+
     runs-on: ubuntu-latest
 
     steps:
@@ -48,17 +50,14 @@ jobs:
           echo "=== SRC ==="
           ls -la src
 
-          echo "=== CHECK LIVE.PY ==="
+          echo "=== CHECK CORE FILES ==="
           test -f src/Live.py
-          echo "src/Live.py FOUND"
-
-          echo "=== CHECK V1.1 ==="
           test -f src/v11_daily_engine.py
-          echo "src/v11_daily_engine.py FOUND"
-
-          echo "=== CHECK VRE ==="
           test -f src/vre_survival_live.py
-          echo "src/vre_survival_live.py FOUND"
+          test -f src/msr_step5_engine.py
+          test -f src/msr_live.py
+
+          echo "All ST5 LIVE files found."
 
       # ============================================================
       # PYTHON
@@ -88,7 +87,18 @@ jobs:
           python download_core26.py
 
       # ============================================================
-      # RUN ST5 LIVE
+      # RUN MSR C4 LIVE
+      # ============================================================
+
+      - name: Run MSR C4 Live
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          PYTHONPATH=src python src/msr_live.py
+
+      # ============================================================
+      # RUN ST5 LIVE CORE
       # ============================================================
 
       - name: Run ST5 LIVE
@@ -110,7 +120,7 @@ jobs:
           PYTHONPATH=src python src/v11_daily_engine.py
 
       # ============================================================
-      # RUN VRE SURVIVAL V1.8 — STEP 1
+      # RUN VRE SURVIVAL V1.8
       # ============================================================
 
       - name: Run VRE Survival V1.8 — Step 1
@@ -119,6 +129,21 @@ jobs:
 
       # ============================================================
       # SHOW MSR STATE
+      # ============================================================
+
+      - name: Show MSR state
+        if: always()
+        run: |
+          echo "=== MSR C4 STATE ==="
+
+          if [ -f data/msr_live_state.json ]; then
+            cat data/msr_live_state.json
+          else
+            echo "No msr_live_state.json"
+          fi
+
+      # ============================================================
+      # SHOW LIVE STATE
       # ============================================================
 
       - name: Show LIVE state
@@ -156,38 +181,12 @@ jobs:
         run: |
           echo "=== SAVE STATES ==="
 
-          if [ -f data/live_state.json ]; then
-            git add data/live_state.json
-            echo "Added: data/live_state.json"
-          else
-            echo "Skip: data/live_state.json"
-          fi
-
-          if [ -f data/v11_daily_state.json ]; then
-            git add data/v11_daily_state.json
-            echo "Added: data/v11_daily_state.json"
-          else
-            echo "Skip: data/v11_daily_state.json"
-          fi
-
-          if [ -f data/vre_survival_state.json ]; then
-            git add data/vre_survival_state.json
-            echo "Added: data/vre_survival_state.json"
-          else
-            echo "Skip: data/vre_survival_state.json"
-          fi
-
-          if git diff --cached --quiet; then
-            echo "No state changes."
-            exit 0
-          fi
-
-          if [ -f data/v11_daily_state.json ]; then
-            git add data/v11_daily_state.json
-            echo "Added: data/v11_daily_state.json"
-          else
-            echo "Skip: data/v11_daily_state.json"
-          fi
+          git add \
+            data/msr_live_state.json \
+            data/live_state.json \
+            data/v11_daily_state.json \
+            data/vre_survival_state.json \
+            2>/dev/null || true
 
           if git diff --cached --quiet; then
             echo "No state changes."
@@ -197,6 +196,6 @@ jobs:
           git config user.name "ST5-LIVE Bot"
           git config user.email "st5-live-bot@users.noreply.github.com"
 
-          git commit -m "Update ST5 LIVE and V1.1 state"
+          git commit -m "Update ST5 LIVE states"
 
-          git push 
+          git push
