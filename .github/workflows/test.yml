@@ -170,6 +170,25 @@ jobs:
             echo "Skip: data/v11_daily_state.json"
           fi
 
+          if [ -f data/vre_survival_state.json ]; then
+            git add data/vre_survival_state.json
+            echo "Added: data/vre_survival_state.json"
+          else
+            echo "Skip: data/vre_survival_state.json"
+          fi
+
+          if git diff --cached --quiet; then
+            echo "No state changes."
+            exit 0
+          fi
+
+          if [ -f data/v11_daily_state.json ]; then
+            git add data/v11_daily_state.json
+            echo "Added: data/v11_daily_state.json"
+          else
+            echo "Skip: data/v11_daily_state.json"
+          fi
+
           if git diff --cached --quiet; then
             echo "No state changes."
             exit 0
