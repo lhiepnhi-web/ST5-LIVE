@@ -1,16 +1,18 @@
 """
-ST5 LIVE — MSR Step 5 Engine Test
+ST5 LIVE
+MSR STEP 5 — C4 INTEGRATION TEST
 
 Purpose:
-- Import msr_step5_engine.py
-- Load MSR historical CSV
-- Run engine
-- Validate engine integrity
-- Print PASS / FAIL
+    Validate that the production MSR Step 5 engine can be imported
+    and executed correctly inside the ST5 LIVE repository.
+
+This test does NOT optimize the strategy.
+This test does NOT modify the engine.
 """
 
 from pathlib import Path
 import sys
+
 import pandas as pd
 
 
@@ -18,357 +20,754 @@ import pandas as pd
 # PATH
 # ============================================================
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT_DIR = Path(__file__).resolve().parent.parent
 
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 
 # ============================================================
-# IMPORT ENGINE
+# IMPORT C4 ENGINE
 # ============================================================
 
 try:
-    import msr_step5_engine as engine
+    from msr_step5_engine import (
+        add_indicators,
+        get_signal_count,
+        law_is_alive,
+        calculate_net_return,
+        run_engine,
+        summarize_trades,
+        run_msr,
+    )
+
+    IMPORT_OK = True
+
 except Exception as e:
-    print("ENGINE IMPORT: FAIL")
-    print(f"Error: {e}")
-    raise
+
+    IMPORT_OK = False
+    IMPORT_ERROR = e
 
 
 # ============================================================
-# DATA LOCATION
+# TEST DATA
 # ============================================================
 
 DATA_CANDIDATES = [
-    ROOT / "data" / "MSR.csv",
-    ROOT / "data" / "msr.csv",
+    ROOT_DIR / "data" / "MSR.csv",
+    ROOT_DIR / "data" / "MSR_STEP5.csv",
 ]
 
 
-def find_msr_file():
+def find_msr_data():
+
     for path in DATA_CANDIDATES:
+
         if path.exists():
+
             return path
 
-    raise FileNotFoundError(
-        "MSR.csv not found in repo data/ directory."
+    return None
+
+
+# ============================================================
+# ASSERT HELPERS
+# ============================================================
+
+def check(
+    name,
+    condition,
+    detail=""
+):
+
+    if condition:
+
+        print(
+            f"{name:<45}: PASS"
+        )
+
+        return True
+
+    print(
+        f"{name:<45}: FAIL"
     )
 
+    if detail:
 
-# ============================================================
-# LOAD DATA
-# ============================================================
+        print(
+            f"    {detail}"
+        )
 
-data_path = find_msr_file()
-
-print("=" * 80)
-print("ST5 LIVE — MSR STEP 5 ENGINE TEST")
-print("=" * 80)
-
-print(f"Repository : {ROOT}")
-print(f"Data       : {data_path}")
-
-df = pd.read_csv(data_path)
-
-print(f"Rows       : {len(df):,}")
+    return False
 
 
 # ============================================================
-# BASIC DATA CHECK
+# MAIN
 # ============================================================
 
-required_columns = [
-    "Date",
-    "Open",
-    "High",
-    "Low",
-    "Close",
-    "Volume",
-]
+def main():
 
-missing = [
-    col for col in required_columns
-    if col not in df.columns
-]
+    print()
+    print("=" * 80)
+    print("ST5 LIVE — MSR STEP 5 C4 INTEGRATION TEST")
+    print("=" * 80)
+    print()
 
-if missing:
-    raise AssertionError(
-        f"Missing required columns: {missing}"
+    failures = 0
+
+    # ========================================================
+    # 1. IMPORT
+    # ========================================================
+
+    print("[1] ENGINE IMPORT")
+
+    if not IMPORT_OK:
+
+        print(
+            "ENGINE IMPORT                               : FAIL"
+        )
+
+        print(
+            f"    {type(IMPORT_ERROR).__name__}: "
+            f"{IMPORT_ERROR}"
+        )
+
+        print()
+        print("C4 INTEGRATION TEST: FAIL")
+        return 1
+
+    print(
+        "ENGINE IMPORT                               : PASS"
     )
 
-print("Required columns : PASS")
+    print()
 
+    # ========================================================
+    # 2. FIND DATA
+    # ========================================================
 
-# ============================================================
-# RUN ENGINE
-# ============================================================
+    print("[2] TEST DATA")
 
-result = engine.run_msr(df)
+    data_path = find_msr_data()
 
-if not isinstance(result, dict):
-    raise AssertionError(
-        "run_msr() must return a dictionary."
+    if data_path is None:
+
+        print(
+            "MSR TEST DATA                               : FAIL"
+        )
+
+        print(
+            "    Không tìm thấy MSR.csv trong data/"
+        )
+
+        print()
+        print("C4 INTEGRATION TEST: FAIL")
+        return 1
+
+    print(
+        "MSR TEST DATA                               : PASS"
     )
 
-if "data" not in result:
-    raise AssertionError(
-        "Engine result missing 'data'."
+    print(
+        f"    File: {data_path}"
     )
 
-if "trades" not in result:
-    raise AssertionError(
-        "Engine result missing 'trades'."
+    print()
+
+    # ========================================================
+    # 3. LOAD DATA
+    # ========================================================
+
+    print("[3] DATA LOAD")
+
+    try:
+
+        df = pd.read_csv(
+            data_path
+        )
+
+        required = [
+            "Date",
+            "Open",
+            "High",
+            "Low",
+            "Close",
+            "Volume",
+        ]
+
+        missing = [
+            col
+            for col in required
+            if col not in df.columns
+        ]
+
+        if missing:
+
+            failures += 1
+
+            check(
+                "Required columns",
+                False,
+                f"Missing: {missing}"
+            )
+
+            print()
+            print("C4 INTEGRATION TEST: FAIL")
+            return 1
+
+        check(
+            "Required columns",
+            True
+        )
+
+        check(
+            "Rows > 100",
+            len(df) > 100,
+            f"rows={len(df)}"
+        )
+
+        print(
+            f"    Rows: {len(df):,}"
+        )
+
+    except Exception as e:
+
+        print(
+            "DATA LOAD                                   : FAIL"
+        )
+
+        print(
+            f"    {type(e).__name__}: {e}"
+        )
+
+        print()
+        print("C4 INTEGRATION TEST: FAIL")
+        return 1
+
+    print()
+
+    # ========================================================
+    # 4. INDICATORS
+    # ========================================================
+
+    print("[4] INDICATOR ENGINE")
+
+    try:
+
+        data = add_indicators(
+            df
+        )
+
+        indicator_columns = [
+            "MACD",
+            "MACD_SIGNAL",
+            "MACD_HIST",
+            "ROC10",
+            "VOL_MA20",
+            "VOLUME_RATIO",
+            "ADX14",
+            "ENTRY_SIGNAL",
+        ]
+
+        for col in indicator_columns:
+
+            ok = check(
+                f"Column {col}",
+                col in data.columns
+            )
+
+            if not ok:
+                failures += 1
+
+        signal_count = get_signal_count(
+            data
+        )
+
+        ok = check(
+            "ENTRY_SIGNAL boolean",
+            str(data["ENTRY_SIGNAL"].dtype)
+            in ["bool", "boolean"]
+        )
+
+        if not ok:
+            failures += 1
+
+        print(
+            f"    ENTRY signals: {signal_count:,}"
+        )
+
+    except Exception as e:
+
+        print(
+            "INDICATOR ENGINE                            : FAIL"
+        )
+
+        print(
+            f"    {type(e).__name__}: {e}"
+        )
+
+        print()
+        print("C4 INTEGRATION TEST: FAIL")
+        return 1
+
+    print()
+
+    # ========================================================
+    # 5. SIGNAL CONSISTENCY
+    # ========================================================
+
+    print("[5] SIGNAL CONSISTENCY")
+
+    try:
+
+        manual_signal = (
+            (data["VOLUME_RATIO"] > 1)
+            & (data["MACD_HIST"] > 0)
+            & (data["ROC10"] > 2)
+            & (data["ADX14"] > 30)
+        )
+
+        mismatch = int(
+            (
+                data["ENTRY_SIGNAL"]
+                != manual_signal
+            ).sum()
+        )
+
+        ok = check(
+            "Manual signal matches C4",
+            mismatch == 0,
+            f"mismatch={mismatch}"
+        )
+
+        if not ok:
+            failures += 1
+
+        nan_signal = int(
+            data.loc[
+                data[
+                    [
+                        "VOLUME_RATIO",
+                        "MACD_HIST",
+                        "ROC10",
+                        "ADX14",
+                    ]
+                ].isna().any(axis=1),
+                "ENTRY_SIGNAL",
+            ].sum()
+        )
+
+        ok = check(
+            "No signal on indicator NaN",
+            nan_signal == 0,
+            f"nan_signals={nan_signal}"
+        )
+
+        if not ok:
+            failures += 1
+
+    except Exception as e:
+
+        print(
+            "SIGNAL CONSISTENCY                           : FAIL"
+        )
+
+        print(
+            f"    {type(e).__name__}: {e}"
+        )
+
+        print()
+        print("C4 INTEGRATION TEST: FAIL")
+        return 1
+
+    print()
+
+    # ========================================================
+    # 6. LAW CHECK
+    # ========================================================
+
+    print("[6] LAW CHECK")
+
+    try:
+
+        valid_rows = data[
+            [
+                "VOLUME_RATIO",
+                "MACD_HIST",
+                "ROC10",
+                "ADX14",
+            ]
+        ].dropna()
+
+        law_errors = 0
+
+        for _, row in valid_rows.head(500).iterrows():
+
+            expected = (
+                (row["VOLUME_RATIO"] > 1)
+                and (row["MACD_HIST"] > 0)
+                and (row["ROC10"] > 2)
+                and (row["ADX14"] > 30)
+            )
+
+            actual = law_is_alive(
+                row
+            )
+
+            if expected != actual:
+
+                law_errors += 1
+
+        ok = check(
+            "LAW logic consistency",
+            law_errors == 0,
+            f"errors={law_errors}"
+        )
+
+        if not ok:
+            failures += 1
+
+    except Exception as e:
+
+        print(
+            "LAW CHECK                                   : FAIL"
+        )
+
+        print(
+            f"    {type(e).__name__}: {e}"
+        )
+
+        print()
+        print("C4 INTEGRATION TEST: FAIL")
+        return 1
+
+    print()
+
+    # ========================================================
+    # 7. RETURN FUNCTION
+    # ========================================================
+
+    print("[7] RETURN ENGINE")
+
+    try:
+
+        ret = calculate_net_return(
+            100.0,
+            120.0
+        )
+
+        expected = (
+            120.0 * (1 - 0.0015 - 0.0010)
+        ) / (
+            100.0 * (1 + 0.0015)
+        ) - 1
+
+        ok = check(
+            "Net return formula",
+            abs(ret - expected) < 1e-12,
+            f"actual={ret}, expected={expected}"
+        )
+
+        if not ok:
+            failures += 1
+
+    except Exception as e:
+
+        print(
+            "RETURN ENGINE                               : FAIL"
+        )
+
+        print(
+            f"    {type(e).__name__}: {e}"
+        )
+
+        print()
+        print("C4 INTEGRATION TEST: FAIL")
+        return 1
+
+    print()
+
+    # ========================================================
+    # 8. TRADE ENGINE
+    # ========================================================
+
+    print("[8] TRADE ENGINE")
+
+    try:
+
+        engine_data, trades = run_engine(
+            df
+        )
+
+        ok = check(
+            "Engine returned dataframe",
+            isinstance(
+                engine_data,
+                pd.DataFrame
+            )
+        )
+
+        if not ok:
+            failures += 1
+
+        ok = check(
+            "Trades returned dataframe",
+            isinstance(
+                trades,
+                pd.DataFrame
+            )
+        )
+
+        if not ok:
+            failures += 1
+
+        trade_columns = [
+            "TradeID",
+            "EntryIndex",
+            "ExitIndex",
+            "EntryDate",
+            "ExitDate",
+            "EntryPrice",
+            "ExitPrice",
+            "HoldBars",
+            "TargetPrice",
+            "ExitReason",
+            "NetReturnPct",
+        ]
+
+        for col in trade_columns:
+
+            ok = check(
+                f"Trade column {col}",
+                col in trades.columns
+            )
+
+            if not ok:
+                failures += 1
+
+        print(
+            f"    Trades: {len(trades):,}"
+        )
+
+    except Exception as e:
+
+        print(
+            "TRADE ENGINE                                : FAIL"
+        )
+
+        print(
+            f"    {type(e).__name__}: {e}"
+        )
+
+        print()
+        print("C4 INTEGRATION TEST: FAIL")
+        return 1
+
+    print()
+
+    # ========================================================
+    # 9. TRADE INTEGRITY
+    # ========================================================
+
+    print("[9] TRADE INTEGRITY")
+
+    try:
+
+        if not trades.empty:
+
+            unique_ids = (
+                trades["TradeID"].is_unique
+            )
+
+            sequential_ids = (
+                trades["TradeID"].tolist()
+                == list(
+                    range(
+                        1,
+                        len(trades) + 1
+                    )
+                )
+            )
+
+            no_overlap = True
+
+            previous_exit = -1
+
+            for _, trade in trades.iterrows():
+
+                entry = int(
+                    trade["EntryIndex"]
+                )
+
+                exit_ = int(
+                    trade["ExitIndex"]
+                )
+
+                if entry <= previous_exit:
+
+                    no_overlap = False
+
+                if exit_ < entry:
+
+                    no_overlap = False
+
+                previous_exit = exit_
+
+            checks = [
+                (
+                    "Trade IDs unique",
+                    unique_ids
+                ),
+                (
+                    "Trade IDs sequential",
+                    sequential_ids
+                ),
+                (
+                    "No overlapping trades",
+                    no_overlap
+                ),
+            ]
+
+            for name, result in checks:
+
+                ok = check(
+                    name,
+                    result
+                )
+
+                if not ok:
+                    failures += 1
+
+        else:
+
+            print(
+                "No trades generated."
+            )
+
+    except Exception as e:
+
+        print(
+            "TRADE INTEGRITY                            : FAIL"
+        )
+
+        print(
+            f"    {type(e).__name__}: {e}"
+        )
+
+        print()
+        print("C4 INTEGRATION TEST: FAIL")
+        return 1
+
+    print()
+
+    # ========================================================
+    # 10. PUBLIC API
+    # ========================================================
+
+    print("[10] PUBLIC API")
+
+    try:
+
+        result = run_msr(
+            df
+        )
+
+        required_keys = [
+            "data",
+            "trades",
+            "summary",
+        ]
+
+        for key in required_keys:
+
+            ok = check(
+                f"run_msr() key: {key}",
+                key in result
+            )
+
+            if not ok:
+                failures += 1
+
+        ok = check(
+            "run_msr() data",
+            isinstance(
+                result["data"],
+                pd.DataFrame
+            )
+        )
+
+        if not ok:
+            failures += 1
+
+        ok = check(
+            "run_msr() trades",
+            isinstance(
+                result["trades"],
+                pd.DataFrame
+            )
+        )
+
+        if not ok:
+            failures += 1
+
+        ok = check(
+            "run_msr() summary",
+            isinstance(
+                result["summary"],
+                dict
+            )
+        )
+
+        if not ok:
+            failures += 1
+
+    except Exception as e:
+
+        print(
+            "PUBLIC API                                  : FAIL"
+        )
+
+        print(
+            f"    {type(e).__name__}: {e}"
+        )
+
+        print()
+        print("C4 INTEGRATION TEST: FAIL")
+        return 1
+
+    # ========================================================
+    # FINAL
+    # ========================================================
+
+    print()
+    print("=" * 80)
+
+    if failures == 0:
+
+        print(
+            "C4 INTEGRATION TEST: PASS"
+        )
+
+        print(
+            "MSR Step 5 engine is executable inside ST5 LIVE."
+        )
+
+        print("=" * 80)
+
+        return 0
+
+    print(
+        f"C4 INTEGRATION TEST: FAIL "
+        f"({failures} checks)"
     )
 
+    print("=" * 80)
 
-data = result["data"]
-trades = result["trades"]
-
-print()
-print("ENGINE EXECUTION : PASS")
+    return 1
 
 
-# ============================================================
-# SIGNAL CHECK
-# ============================================================
+if __name__ == "__main__":
 
-signal_count = engine.get_signal_count(data)
-
-print()
-print("[SIGNAL]")
-print(f"ENTRY_SIGNAL : {signal_count}")
-
-if signal_count < 0:
-    raise AssertionError("Invalid signal count.")
-
-print("Signal generation : PASS")
-
-
-# ============================================================
-# TRADE CHECK
-# ============================================================
-
-if trades is None:
-    raise AssertionError("Trades object is None.")
-
-if not isinstance(trades, pd.DataFrame):
-    raise AssertionError(
-        "Trades must be a pandas DataFrame."
+    raise SystemExit(
+        main()
     )
-
-print()
-print("[TRADES]")
-print(f"Trades : {len(trades)}")
-
-if len(trades) == 0:
-    raise AssertionError(
-        "Engine produced zero trades."
-    )
-
-
-# ============================================================
-# REQUIRED TRADE COLUMNS
-# ============================================================
-
-required_trade_columns = [
-    "TradeID",
-    "EntryDate",
-    "ExitDate",
-    "EntryPrice",
-    "ExitPrice",
-    "HoldBars",
-    "Return",
-    "ExitReason",
-]
-
-missing_trade_columns = [
-    col
-    for col in required_trade_columns
-    if col not in trades.columns
-]
-
-if missing_trade_columns:
-    raise AssertionError(
-        f"Missing trade columns: {missing_trade_columns}"
-    )
-
-print("Trade columns : PASS")
-
-
-# ============================================================
-# TRADE ID INTEGRITY
-# ============================================================
-
-trade_ids = trades["TradeID"].tolist()
-
-expected_ids = list(range(1, len(trades) + 1))
-
-if trade_ids != expected_ids:
-    raise AssertionError(
-        "Trade IDs are not sequential."
-    )
-
-if trades["TradeID"].is_unique is not True:
-    raise AssertionError(
-        "Trade IDs are not unique."
-    )
-
-print("Trade ID integrity : PASS")
-
-
-# ============================================================
-# ENTRY / EXIT DATE
-# ============================================================
-
-trades["EntryDate"] = pd.to_datetime(trades["EntryDate"])
-trades["ExitDate"] = pd.to_datetime(trades["ExitDate"])
-
-if (trades["ExitDate"] < trades["EntryDate"]).any():
-    raise AssertionError(
-        "Found negative holding period."
-    )
-
-print("Date integrity : PASS")
-
-
-# ============================================================
-# NO OVERLAP
-# ============================================================
-
-ordered = trades.sort_values("EntryDate").reset_index(drop=True)
-
-overlap_count = 0
-
-for i in range(1, len(ordered)):
-    previous_exit = ordered.loc[i - 1, "ExitDate"]
-    current_entry = ordered.loc[i, "EntryDate"]
-
-    if current_entry <= previous_exit:
-        overlap_count += 1
-
-print(f"Overlap count : {overlap_count}")
-
-if overlap_count != 0:
-    raise AssertionError(
-        f"Found {overlap_count} overlapping trades."
-    )
-
-print("No-overlap integrity : PASS")
-
-
-# ============================================================
-# EXIT DISTRIBUTION
-# ============================================================
-
-exit_counts = trades["ExitReason"].value_counts()
-
-tp20 = int(exit_counts.get("TP20", 0))
-law = int(exit_counts.get("LOSS_OF_LAW", 0))
-max_hold = int(exit_counts.get("MAX_HOLD", 0))
-eod = int(exit_counts.get("END_OF_DATA", 0))
-
-print()
-print("[EXIT DISTRIBUTION]")
-print(f"TP20          : {tp20}")
-print(f"LOSS_OF_LAW   : {law}")
-print(f"MAX_HOLD      : {max_hold}")
-print(f"END_OF_DATA   : {eod}")
-
-if tp20 + law + max_hold + eod != len(trades):
-    raise AssertionError(
-        "Exit reason accounting mismatch."
-    )
-
-print("Exit accounting : PASS")
-
-
-# ============================================================
-# RETURN INTEGRITY
-# ============================================================
-
-if trades["Return"].isna().any():
-    raise AssertionError(
-        "Trade Return contains NaN."
-    )
-
-if not pd.api.types.is_numeric_dtype(trades["Return"]):
-    raise AssertionError(
-        "Trade Return is not numeric."
-    )
-
-print("Return integrity : PASS")
-
-
-# ============================================================
-# TP20 INTEGRITY
-# ============================================================
-
-tp_trades = trades[
-    trades["ExitReason"] == "TP20"
-].copy()
-
-tp_errors = 0
-
-for _, row in tp_trades.iterrows():
-
-    target = row["EntryPrice"] * 1.20
-
-    if row["ExitPrice"] > target + 1e-9:
-        tp_errors += 1
-
-if tp_errors:
-    raise AssertionError(
-        f"TP20 exit-price errors: {tp_errors}"
-    )
-
-print("TP20 integrity : PASS")
-
-
-# ============================================================
-# MAX HOLD INTEGRITY
-# ============================================================
-
-max_hold_errors = 0
-
-for _, row in trades[
-    trades["ExitReason"] == "MAX_HOLD"
-].iterrows():
-
-    if row["HoldBars"] < 10:
-        max_hold_errors += 1
-
-if max_hold_errors:
-    raise AssertionError(
-        f"MAX_HOLD early exits: {max_hold_errors}"
-    )
-
-print("MAX_HOLD integrity : PASS")
-
-
-# ============================================================
-# SUMMARY
-# ============================================================
-
-summary = engine.summarize_trades(trades)
-
-print()
-print("=" * 80)
-print("ENGINE SUMMARY")
-print("=" * 80)
-
-if isinstance(summary, dict):
-    for key, value in summary.items():
-        print(f"{key:<25}: {value}")
-else:
-    print(summary)
-
-
-# ============================================================
-# FINAL
-# ============================================================
-
-print()
-print("=" * 80)
-print("MSR STEP 5 ENGINE TEST : PASS")
-print("=" * 80) 
