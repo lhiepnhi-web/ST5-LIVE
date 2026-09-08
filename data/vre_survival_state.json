@@ -1,0 +1,97 @@
+{
+  "version": "V1.8",
+  "updated_at": "2026-09-08T12:39:05.159738+00:00",
+  "tickers": {
+    "VIX": {
+      "last_date": "2026-09-08T07:00:00",
+      "close": 13.75,
+      "adx14": 20.545915389948686,
+      "macd_hist": 0.08557231782099642,
+      "macd_hist_slope": -0.02987622032230937,
+      "roc10": 8.695652173913038,
+      "decision": "EXIT",
+      "previous_decision": null,
+      "position": false,
+      "signal": null,
+      "updated_at": "2026-09-08T12:38:54.863394+00:00"
+    },
+    "ABB": {
+      "last_date": "2026-09-08T07:00:00",
+      "close": 17.2,
+      "adx14": 31.49597877195545,
+      "macd_hist": -0.007274421872292283,
+      "macd_hist_slope": 0.000739435865741947,
+      "roc10": 1.17647058823529,
+      "decision": "EXIT",
+      "previous_decision": null,
+      "position": false,
+      "signal": null,
+      "updated_at": "2026-09-08T12:38:56.242750+00:00"
+    },
+    "AAS": {
+      "last_date": "2026-09-08T07:00:00",
+      "close": 8.6,
+      "adx14": 31.25239324586049,
+      "macd_hist": 0.18709184943044585,
+      "macd_hist_slope": -0.003402218931905232,
+      "roc10": 19.444444444444443,
+      "decision": "HOLD",
+      "previous_decision": null,
+      "position": false,
+      "signal": null,
+      "updated_at": "2026-09-08T12:38:57.764892+00:00"
+    },
+    "SHS": {
+      "last_date": "2026-09-08T07:00:00",
+      "close": 15.1,
+      "adx14": 23.51108537543691,
+      "macd_hist": 0.029360613759098375,
+      "macd_hist_slope": -0.016404393428529174,
+      "roc10": 2.7210884353741527,
+      "decision": "EXIT",
+      "previous_decision": null,
+      "position": false,
+      "signal": null,
+      "updated_at": "2026-09-08T12:38:59.699241+00:00"
+    },
+    "NKG": {
+      "last_date": "2026-09-08T07:00:00",
+      "close": 10.75,
+      "adx14": 23.16966437470799,
+      "macd_hist": 0.004038088546147317,
+      "macd_hist_slope": -0.0030700890778397882,
+      "roc10": 1.4150943396226356,
+      "decision": "EXIT",
+      "previous_decision": null,
+      "position": false,
+      "signal": null,
+      "updated_at": "2026-09-08T12:39:01.327232+00:00"
+    },
+    "HPG": {
+      "last_date": "2026-09-08T07:00:00",
+      "close": 21.85,
+      "adx14": 19.277058348477066,
+      "macd_hist": 0.03637523589334253,
+      "macd_hist_slope": 0.003294962523146691,
+      "roc10": 3.309692671394804,
+      "decision": "EXIT",
+      "previous_decision": null,
+      "position": false,
+      "signal": null,
+      "updated_at": "2026-09-08T12:39:03.296359+00:00"
+    },
+    "DXG": {
+      "last_date": "2026-09-08T07:00:00",
+      "close": 11.5,
+      "adx14": 20.559512664316525,
+      "macd_hist": 0.034211207522717724,
+      "macd_hist_slope": -0.03049600302548186,
+      "roc10": 5.990783410138256,
+      "decision": "EXIT",
+      "previous_decision": null,
+      "position": false,
+      "signal": null,
+      "updated_at": "2026-09-08T12:39:05.159668+00:00"
+    }
+  }
+}
