@@ -1,74 +1,181 @@
 import os
+import sys
 import json
-import requests
+from datetime import datetime, time as dt_time
+
 import pandas as pd
+import pytz
+
+
+# ============================================================
+# ST5 LIVE — SIGNAL SCANNER
+# ============================================================
+#
+# Luồng:
+#
+# DATA UPDATE
+#      ↓
+# 5M completed candle
+#      ↓
+# 5M indicator / Trigger
+#      +
+# completed 15M confirmation
+#      ↓
+# BUY
+#      ↓
+# Telegram
+#
+# Không tự đặt lệnh.
+# Không gửi SELL.
+# Không xử lý T+2.5 ở bước này.
+#
+# ============================================================
+
+
+# ============================================================
+# ROOT
+# ============================================================
+
+ROOT_DIR = os.path.abspath(
+    os.path.join(
+        os.path.dirname(__file__),
+        ".."
+    )
+)
+
+sys.path.insert(
+    0,
+    ROOT_DIR
+)
+
+
+# ============================================================
+# IMPORT
+# ============================================================
 
 from config import CORE26
 from indicators import add_v14_indicators, v14_signal
 
 
 # ============================================================
-# ST5 LIVE
-# 5M TRIGGER + 15M CONFIRM
-# V1.4 FROZEN
+# CONFIG
 # ============================================================
 
-STATE_FILE = "data/live_state.json"
-DATA_DIR = "data/INTRADAY_5M"
+DATA_DIR = os.path.join(
+    ROOT_DIR,
+    "data",
+    "INTRADAY_5M"
+)
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+STATE_FILE = os.path.join(
+    ROOT_DIR,
+    "data",
+    "live_state.json"
+)
 
-TIMEZONE = "Asia/Ho_Chi_Minh"
+TZ = pytz.timezone(
+    "Asia/Ho_Chi_Minh"
+)
 
 
 # ============================================================
 # TELEGRAM
 # ============================================================
 
-def send_telegram(text):
+TELEGRAM_BOT_TOKEN = os.getenv(
+    "TELEGRAM_BOT_TOKEN"
+)
 
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("❌ Thiếu Telegram secrets")
+TELEGRAM_CHAT_ID = os.getenv(
+    "TELEGRAM_CHAT_ID"
+)
+
+
+def send_telegram(message):
+
+    if not TELEGRAM_BOT_TOKEN:
+        print(
+            "⚠️ TELEGRAM_BOT_TOKEN chưa được cấu hình."
+        )
         return False
 
-    url = (
-        f"https://api.telegram.org/bot"
-        f"{TELEGRAM_TOKEN}/sendMessage"
-    )
+    if not TELEGRAM_CHAT_ID:
+        print(
+            "⚠️ TELEGRAM_CHAT_ID chưa được cấu hình."
+        )
+        return False
 
     try:
 
+        import requests
+
+        url = (
+            f"https://api.telegram.org/"
+            f"bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        )
+
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
+        }
+
         response = requests.post(
             url,
-            json={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": text,
-            },
-            timeout=20,
+            json=payload,
+            timeout=15
         )
 
-        if response.ok:
-            print("📨 Telegram: OK")
-            return True
+        response.raise_for_status()
 
         print(
-            "❌ Telegram lỗi:",
-            response.status_code,
-            response.text
+            "📨 Telegram: SENT"
         )
 
-        return False
+        return True
 
     except Exception as e:
 
         print(
-            "❌ Telegram exception:",
-            type(e).__name__,
-            str(e)
+            f"❌ Telegram error: "
+            f"{type(e).__name__}: {e}"
         )
 
         return False
+
+
+# ============================================================
+# TIME
+# ============================================================
+
+def now_vietnam():
+
+    return datetime.now(
+        TZ
+    )
+
+
+def in_trading_session(
+    current_time
+):
+
+    current = current_time.time()
+
+    morning = (
+        dt_time(9, 15)
+        <= current
+        <= dt_time(11, 30)
+    )
+
+    afternoon = (
+        dt_time(13, 0)
+        <= current
+        <= dt_time(14, 30)
+    )
+
+    return (
+        morning
+        or afternoon
+    )
 
 
 # ============================================================
@@ -77,7 +184,10 @@ def send_telegram(text):
 
 def load_state():
 
-    if not os.path.exists(STATE_FILE):
+    if not os.path.exists(
+        STATE_FILE
+    ):
+
         return {}
 
     try:
@@ -88,14 +198,22 @@ def load_state():
             encoding="utf-8"
         ) as f:
 
-            return json.load(f)
+            state = json.load(f)
+
+        if not isinstance(
+            state,
+            dict
+        ):
+
+            return {}
+
+        return state
 
     except Exception as e:
 
         print(
-            "⚠️ Không đọc được state:",
-            type(e).__name__,
-            str(e)
+            f"⚠️ State read error: "
+            f"{type(e).__name__}: {e}"
         )
 
         return {}
@@ -104,11 +222,16 @@ def load_state():
 def save_state(state):
 
     os.makedirs(
-        os.path.dirname(STATE_FILE),
+        os.path.dirname(
+            STATE_FILE
+        ),
         exist_ok=True
     )
 
-    temp_file = STATE_FILE + ".tmp"
+    temp_file = (
+        STATE_FILE
+        + ".tmp"
+    )
 
     with open(
         temp_file,
@@ -130,67 +253,25 @@ def save_state(state):
 
 
 # ============================================================
-# TIME
+# LOAD DATA
 # ============================================================
 
-def now_vietnam():
-
-    return pd.Timestamp.now(
-        tz=TIMEZONE
-    ).tz_localize(None)
-
-
-def in_session(dt):
-
-    t = dt.time()
-
-    morning_start = pd.Timestamp(
-        "09:15"
-    ).time()
-
-    morning_end = pd.Timestamp(
-        "11:30"
-    ).time()
-
-    afternoon_start = pd.Timestamp(
-        "13:00"
-    ).time()
-
-    afternoon_end = pd.Timestamp(
-        "14:30"
-    ).time()
-
-    return (
-        (
-            morning_start
-            <= t
-            <= morning_end
-        )
-        or
-        (
-            afternoon_start
-            <= t
-            <= afternoon_end
-        )
-    )
-
-
-# ============================================================
-# DATA
-# ============================================================
-
-def load_5m_file(ticker):
+def load_5m_file(
+    ticker
+):
 
     file_path = os.path.join(
         DATA_DIR,
         f"{ticker}_5m.csv"
     )
 
-    if not os.path.exists(file_path):
+    if not os.path.exists(
+        file_path
+    ):
 
         print(
-            f"⚠️ {ticker}: không có file "
-            f"{file_path}"
+            f"⚠️ {ticker}: "
+            "5M file not found"
         )
 
         return pd.DataFrame()
@@ -204,9 +285,8 @@ def load_5m_file(ticker):
     except Exception as e:
 
         print(
-            f"❌ {ticker}: đọc CSV lỗi:",
-            type(e).__name__,
-            str(e)
+            f"❌ {ticker}: "
+            f"read error: {e}"
         )
 
         return pd.DataFrame()
@@ -217,7 +297,7 @@ def load_5m_file(ticker):
         "High",
         "Low",
         "Close",
-        "Volume"
+        "Volume",
     ]
 
     missing = [
@@ -229,7 +309,8 @@ def load_5m_file(ticker):
     if missing:
 
         print(
-            f"❌ {ticker}: thiếu cột {missing}"
+            f"❌ {ticker}: "
+            f"missing columns {missing}"
         )
 
         return pd.DataFrame()
@@ -255,7 +336,8 @@ def load_5m_file(ticker):
     )
 
     df = df.drop_duplicates(
-        subset=["Date"]
+        subset=["Date"],
+        keep="last"
     )
 
     return df.reset_index(
@@ -264,173 +346,96 @@ def load_5m_file(ticker):
 
 
 # ============================================================
-# 15M
+# COMPLETED 5M CANDLES
 # ============================================================
 
-def build_15m(df5):
+def completed_5m(
+    df,
+    current_time
+):
 
-    df = df5.copy()
+    if df.empty:
+        return df
 
-    df["Date"] = pd.to_datetime(
-        df["Date"],
-        errors="coerce"
+    df = df.copy()
+
+    # Candle Date = candle open time.
+    # Chỉ sử dụng candle đã đóng.
+    candle_end = (
+        df["Date"]
+        + pd.Timedelta(minutes=5)
     )
 
-    df = df.dropna(
+    df = df[
+        candle_end
+        <= current_time
+    ]
+
+    return df.reset_index(
+        drop=True
+    )
+
+
+# ============================================================
+# BUILD 15M
+# ============================================================
+
+def build_15m(
+    df5
+):
+
+    if df5.empty:
+
+        return pd.DataFrame()
+
+    x = df5.copy()
+
+    x = x.set_index(
+        "Date"
+    )
+
+    df15 = x.resample(
+        "15min",
+        origin="start_day",
+        offset="15min"
+    ).agg(
+        {
+            "Open": "first",
+            "High": "max",
+            "Low": "min",
+            "Close": "last",
+            "Volume": "sum",
+        }
+    )
+
+    df15 = df15.dropna(
         subset=[
-            "Date",
             "Open",
             "High",
             "Low",
             "Close",
-            "Volume"
+            "Volume",
         ]
     )
 
-    df = df.sort_values(
-        "Date"
-    )
-
-    df = df.set_index(
-        "Date"
-    )
-
-    df15 = (
-        df[
-            [
-                "Open",
-                "High",
-                "Low",
-                "Close",
-                "Volume"
-            ]
-        ]
-        .resample(
-            "15min",
-            origin="start_day",
-            offset="15min"
-        )
-        .agg(
-            {
-                "Open": "first",
-                "High": "max",
-                "Low": "min",
-                "Close": "last",
-                "Volume": "sum",
-            }
-        )
-        .dropna(
-            subset=[
-                "Open",
-                "High",
-                "Low",
-                "Close"
-            ]
-        )
-        .reset_index()
-    )
+    df15 = df15.reset_index()
 
     return df15
 
 
 # ============================================================
-# BOOLEAN HELPER
+# COMPLETED 15M
 # ============================================================
 
-def safe_bool(series):
-
-    return (
-        series
-        .astype("boolean")
-        .fillna(False)
-        .astype(bool)
-    )
-
-
-# ============================================================
-# PROCESS ONE TICKER
-# ============================================================
-
-def process_ticker(
-    ticker,
-    state,
+def completed_15m(
+    df15,
     current_time
 ):
 
-    print()
-    print("-" * 70)
-    print(f"Ticker: {ticker}")
-
-    # --------------------------------------------------------
-    # READ LOCAL 5M CSV
-    # --------------------------------------------------------
-
-    df5 = load_5m_file(
-        ticker
-    )
-
-    if df5.empty:
-
-        print(
-            f"⚠️ {ticker}: không có dữ liệu"
-        )
-
-        return False
-
-    # --------------------------------------------------------
-    # ONLY COMPLETED 5M CANDLES
-    #
-    # Giả định timestamp là thời điểm bắt đầu nến.
-    # Ví dụ 10:15 = nến 10:15 → 10:20.
-    # --------------------------------------------------------
-
-    df5 = df5[
-        (
-            df5["Date"]
-            + pd.Timedelta(minutes=5)
-            <= current_time
-        )
-    ].copy()
-
-    if df5.empty:
-
-        print(
-            f"⚠️ {ticker}: chưa có nến 5M hoàn tất"
-        )
-
-        return False
-
-    # --------------------------------------------------------
-    # V1.4 INDICATORS ON 5M
-    # --------------------------------------------------------
-
-    df5 = add_v14_indicators(
-        df5
-    )
-
-    df5["Trigger"] = safe_bool(
-        v14_signal(df5)
-    )
-
-    # --------------------------------------------------------
-    # BUILD 15M
-    # --------------------------------------------------------
-
-    df15 = build_15m(
-        df5
-    )
-
     if df15.empty:
+        return df15
 
-        print(
-            f"⚠️ {ticker}: không tạo được 15M"
-        )
-
-        return False
-
-    # --------------------------------------------------------
-    # ONLY COMPLETED 15M CANDLES
-    # --------------------------------------------------------
+    df15 = df15.copy()
 
     df15["AvailableAt"] = (
         df15["Date"]
@@ -440,287 +445,249 @@ def process_ticker(
     df15 = df15[
         df15["AvailableAt"]
         <= current_time
-    ].copy()
+    ]
 
-    if df15.empty:
+    return df15.reset_index(
+        drop=True
+    )
 
-        print(
-            f"⚠️ {ticker}: chưa có nến 15M hoàn tất"
+
+# ============================================================
+# BUILD LIVE SIGNAL
+# ============================================================
+
+def calculate_signal(
+    df5,
+    current_time
+):
+
+    # --------------------------------------------------------
+    # COMPLETED 5M
+    # --------------------------------------------------------
+
+    df5 = completed_5m(
+        df5,
+        current_time
+    )
+
+    if len(df5) < 50:
+
+        return pd.DataFrame()
+
+    # --------------------------------------------------------
+    # 5M TRIGGER
+    # --------------------------------------------------------
+
+    df5 = add_v14_indicators(
+        df5.copy()
+    )
+
+    df5["Trigger"] = (
+        v14_signal(
+            df5
         )
-
-        return False
+        .astype(bool)
+    )
 
     # --------------------------------------------------------
-    # V1.4 INDICATORS ON 15M
+    # 15M CONFIRMATION
     # --------------------------------------------------------
+
+    df15 = build_15m(
+        df5[
+            [
+                "Date",
+                "Open",
+                "High",
+                "Low",
+                "Close",
+                "Volume",
+            ]
+        ].copy()
+    )
+
+    df15 = completed_15m(
+        df15,
+        current_time
+    )
+
+    if len(df15) < 20:
+
+        return pd.DataFrame()
 
     df15 = add_v14_indicators(
         df15
     )
 
-    df15["Confirm"] = safe_bool(
-        v14_signal(df15)
+    df15["Confirm"] = (
+        v14_signal(
+            df15
+        )
+        .astype(bool)
     )
 
-    # Chỉ giữ dữ liệu cần cho merge
-    confirm = df15[
+    # --------------------------------------------------------
+    # MERGE
+    # --------------------------------------------------------
+
+    df15_merge = df15[
         [
             "AvailableAt",
             "Confirm",
-            "VolumeRatio",
-            "ROC10",
-            "MACD_Hist",
-            "ADX14"
         ]
-    ].copy()
-
-    confirm = confirm.sort_values(
+    ].sort_values(
         "AvailableAt"
     )
 
-    # --------------------------------------------------------
-    # MERGE 5M + 15M
-    #
-    # 5M chỉ được sử dụng confirmation
-    # sau khi nến 15M đã hoàn tất.
-    # --------------------------------------------------------
-
-    df5 = df5.sort_values(
-        "Date"
-    )
-
-    merged = pd.merge_asof(
-        df5,
-        confirm,
+    result = pd.merge_asof(
+        df5.sort_values("Date"),
+        df15_merge,
         left_on="Date",
         right_on="AvailableAt",
         direction="backward"
     )
 
-    # --------------------------------------------------------
-    # 15M CONFIRM
-    # --------------------------------------------------------
-
-    merged["Confirm"] = safe_bool(
-        merged["Confirm"]
+    result["Confirm"] = (
+        result["Confirm"]
+        .fillna(False)
+        .astype(bool)
     )
 
-    # --------------------------------------------------------
-    # FINAL SIGNAL
-    #
-    # 5M Trigger
-    # AND
-    # 15M Confirm
-    # --------------------------------------------------------
-
-    merged["Signal"] = (
-        merged["Trigger"]
-        & merged["Confirm"]
+    result["BUY"] = (
+        result["Trigger"]
+        & result["Confirm"]
     )
 
-    # --------------------------------------------------------
-    # ONLY MARKET SESSION
-    # --------------------------------------------------------
+    return result
 
-    merged = merged[
-        merged["Date"].apply(
-            in_session
-        )
-    ].copy()
 
-    if len(merged) < 2:
+# ============================================================
+# PROCESS ONE TICKER
+# ============================================================
+
+def process_ticker(
+    ticker,
+    current_time,
+    state
+):
+
+    print()
+    print(
+        f"[SCAN] {ticker}"
+    )
+
+    df5 = load_5m_file(
+        ticker
+    )
+
+    if df5.empty:
+
+        return None
+
+    result = calculate_signal(
+        df5,
+        current_time
+    )
+
+    if result.empty:
 
         print(
-            f"⚠️ {ticker}: chưa đủ 2 nến "
-            f"để xác định BUY/SELL"
+            f"   {ticker}: "
+            "not enough completed data"
         )
 
-        return False
+        return None
 
-    # --------------------------------------------------------
-    # LATEST + PREVIOUS
-    # --------------------------------------------------------
+    latest = result.iloc[-1]
 
-    latest = merged.iloc[-1]
-    previous = merged.iloc[-2]
-
-    latest_time = pd.Timestamp(
-        latest["Date"]
-    )
-
-    latest_signal = bool(
-        latest["Signal"]
-    )
-
-    previous_signal = bool(
-        previous["Signal"]
-    )
+    signal_time = latest["Date"]
 
     trigger = bool(
         latest["Trigger"]
     )
 
-    confirm_signal = bool(
+    confirm = bool(
         latest["Confirm"]
     )
 
+    buy = bool(
+        latest["BUY"]
+    )
+
+    print(
+        f"   Candle : {signal_time}"
+    )
+
+    print(
+        f"   Close  : {latest['Close']}"
+    )
+
+    print(
+        f"   Trigger: {trigger}"
+    )
+
+    print(
+        f"   Confirm: {confirm}"
+    )
+
+    print(
+        f"   BUY    : {buy}"
+    )
+
     # --------------------------------------------------------
-    # STATE MACHINE
-    #
-    # False → True  = BUY
-    # True  → False = SELL
+    # NO BUY
     # --------------------------------------------------------
 
-    action = None
+    if not buy:
+
+        return None
+
+    # --------------------------------------------------------
+    # DEDUP
+    # --------------------------------------------------------
+
+    ticker_state = state.get(
+        ticker,
+        {}
+    )
+
+    last_buy_time = (
+        ticker_state.get(
+            "last_buy_signal"
+        )
+    )
+
+    signal_time_str = (
+        pd.Timestamp(
+            signal_time
+        ).isoformat()
+    )
 
     if (
-        latest_signal
-        and not previous_signal
+        last_buy_time
+        == signal_time_str
     ):
 
-        action = "BUY"
-
-    elif (
-        not latest_signal
-        and previous_signal
-    ):
-
-        action = "SELL"
-
-    # --------------------------------------------------------
-    # PRINT STATUS
-    # --------------------------------------------------------
-
-    print(
-        f"Latest 5M : {latest_time}"
-    )
-
-    print(
-        f"5M Trigger: "
-        f"{'✅' if trigger else '❌'}"
-    )
-
-    print(
-        f"15M Confirm: "
-        f"{'✅' if confirm_signal else '❌'}"
-    )
-
-    print(
-        f"V1.4 Signal: "
-        f"{'✅' if latest_signal else '❌'}"
-    )
-
-    if action is None:
-
         print(
-            "→ Không có tín hiệu mới"
+            f"   {ticker}: "
+            "BUY already sent"
         )
 
-        return False
+        return None
 
     # --------------------------------------------------------
-    # DEDUPLICATION
+    # TELEGRAM
     # --------------------------------------------------------
-
-    state_key = (
-        f"{ticker}_{action}_"
-        f"{latest_time.strftime('%Y%m%d_%H%M')}"
-    )
-
-    if state.get(ticker) == state_key:
-
-        print(
-            f"⚠️ Đã gửi trước đó: "
-            f"{state_key}"
-        )
-
-        return False
-
-    # --------------------------------------------------------
-    # INDICATOR VALUES
-    # --------------------------------------------------------
-
-    vr = latest.get(
-        "VolumeRatio",
-        float("nan")
-    )
-
-    roc = latest.get(
-        "ROC10",
-        float("nan")
-    )
-
-    macd = latest.get(
-        "MACD_Hist",
-        float("nan")
-    )
-
-    adx = latest.get(
-        "ADX14",
-        float("nan")
-    )
-
-    # 15M values
-    vr15 = latest.get(
-        "VolumeRatio_y",
-        float("nan")
-    )
-
-    roc15 = latest.get(
-        "ROC10_y",
-        float("nan")
-    )
-
-    macd15 = latest.get(
-        "MACD_Hist_y",
-        float("nan")
-    )
-
-    adx15 = latest.get(
-        "ADX14_y",
-        float("nan")
-    )
-
-    # --------------------------------------------------------
-    # TELEGRAM MESSAGE
-    # --------------------------------------------------------
-
-    emoji = (
-        "🟢"
-        if action == "BUY"
-        else "🔴"
-    )
 
     message = (
-        f"{emoji} ST5 LIVE — {action}\n"
-        f"\n"
+        "🚨 ST5 LIVE — BUY SIGNAL\n\n"
         f"Ticker: {ticker}\n"
-        f"Time: "
-        f"{latest_time.strftime('%Y-%m-%d %H:%M')}\n"
-        f"Price: {latest['Close']}\n"
-        f"\n"
-        f"V1.4 FROZEN\n"
-        f"5M Trigger: "
-        f"{'✅' if trigger else '❌'}\n"
-        f"15M Confirm: "
-        f"{'✅' if confirm_signal else '❌'}\n"
-        f"\n"
-        f"5M indicators:\n"
-        f"VolumeRatio = {vr:.2f}\n"
-        f"ROC10 = {roc:.2f}\n"
-        f"MACD Hist = {macd:.4f}\n"
-        f"ADX14 = {adx:.2f}\n"
-        f"\n"
-        f"15M indicators:\n"
-        f"VolumeRatio = {vr15:.2f}\n"
-        f"ROC10 = {roc15:.2f}\n"
-        f"MACD Hist = {macd15:.4f}\n"
-        f"ADX14 = {adx15:.2f}"
+        f"Time: {signal_time}\n"
+        f"Close: {latest['Close']}\n"
+        f"Trigger: {'PASS' if trigger else 'FAIL'}\n"
+        f"15M Confirm: {'PASS' if confirm else 'FAIL'}\n\n"
+        "⚠️ Paper signal — chưa tự đặt lệnh."
     )
-
-    # --------------------------------------------------------
-    # SEND
-    # --------------------------------------------------------
 
     sent = send_telegram(
         message
@@ -729,28 +696,40 @@ def process_ticker(
     if not sent:
 
         print(
-            "❌ Không cập nhật state "
-            "vì Telegram gửi thất bại"
+            f"   {ticker}: "
+            "Telegram failed"
         )
 
-        return False
+        return None
 
     # --------------------------------------------------------
     # SAVE STATE
     # --------------------------------------------------------
 
-    state[ticker] = state_key
+    state[ticker] = {
+        "last_buy_signal": signal_time_str,
+        "last_close": float(
+            latest["Close"]
+        ),
+        "updated_at": current_time.isoformat(),
+    }
 
     save_state(
         state
     )
 
     print(
-        f"✅ Đã xử lý {action}: "
-        f"{state_key}"
+        f"   ✅ {ticker}: "
+        "BUY SENT"
     )
 
-    return True
+    return {
+        "Ticker": ticker,
+        "SignalTime": signal_time,
+        "Close": float(
+            latest["Close"]
+        ),
+    }
 
 
 # ============================================================
@@ -759,117 +738,119 @@ def process_ticker(
 
 def main():
 
-    print()
-    print("=" * 70)
-    print("ST5 LIVE — CORE26")
-    print("5M TRIGGER + 15M CONFIRM")
-    print("V1.4 FROZEN")
-    print("=" * 70)
-
     current_time = now_vietnam()
 
+    print()
+    print("=" * 70)
+    print("ST5 LIVE — INTRADAY SIGNAL SCANNER")
+    print("=" * 70)
+
     print(
-        f"Vietnam time: "
-        f"{current_time.strftime('%Y-%m-%d %H:%M:%S')}"
+        f"Vietnam time: {current_time}"
     )
 
     # --------------------------------------------------------
-    # KHÔNG CHẠY NGOÀI GIỜ GIAO DỊCH
+    # WEEKDAY
     # --------------------------------------------------------
 
-    if not in_session(
-        current_time
-    ):
+    if current_time.weekday() >= 5:
 
-        print()
         print(
-            "⏸ Ngoài giờ giao dịch."
+            "⏸ Weekend — scanner stopped."
         )
-        print(
-            "Không xử lý tín hiệu."
-        )
-        print("=" * 70)
 
         return
 
-    print(
-        f"CORE26: {len(CORE26)} ticker"
-    )
+    # --------------------------------------------------------
+    # SESSION
+    # --------------------------------------------------------
+
+    if not in_trading_session(
+        current_time
+    ):
+
+        print(
+            "⏸ Outside trading session."
+        )
+
+        return
 
     # --------------------------------------------------------
-    # LOAD STATE
+    # STATE
     # --------------------------------------------------------
 
     state = load_state()
 
-    signals_sent = 0
-    processed = 0
-    errors = 0
+    results = []
 
     # --------------------------------------------------------
-    # PROCESS CORE26
+    # SCAN CORE26
     # --------------------------------------------------------
 
     for ticker in CORE26:
 
         try:
 
-            result = process_ticker(
-                ticker=ticker,
-                state=state,
-                current_time=current_time
+            signal = process_ticker(
+                ticker,
+                current_time,
+                state
             )
 
-            processed += 1
+            if signal is not None:
 
-            if result:
-                signals_sent += 1
+                results.append(
+                    signal
+                )
 
         except Exception as e:
 
-            errors += 1
-
-            print()
             print(
-                f"❌ {ticker}: LỖI"
-            )
-
-            print(
-                f"   {type(e).__name__}: {e}"
+                f"❌ {ticker}: "
+                f"{type(e).__name__}: {e}"
             )
 
     # --------------------------------------------------------
-    # FINAL
+    # SUMMARY
     # --------------------------------------------------------
 
     print()
     print("=" * 70)
-    print("ST5 LIVE — KẾT QUẢ")
+    print("SCAN COMPLETE")
     print("=" * 70)
 
     print(
-        f"Processed    : "
-        f"{processed}/{len(CORE26)}"
+        f"Tickers scanned : {len(CORE26)}"
     )
 
     print(
-        f"Signals sent : "
-        f"{signals_sent}"
+        f"BUY sent        : {len(results)}"
     )
 
-    print(
-        f"Errors       : "
-        f"{errors}"
-    )
+    if results:
 
-    print(
-        f"State file   : "
-        f"{STATE_FILE}"
-    )
+        print()
+        print(
+            "BUY SIGNALS:"
+        )
+
+        for item in results:
+
+            print(
+                f"  {item['Ticker']} | "
+                f"{item['SignalTime']} | "
+                f"{item['Close']}"
+            )
+
+    else:
+
+        print(
+            "No new BUY signal."
+        )
 
     print("=" * 70)
 
 
 if __name__ == "__main__":
 
-    main() 
+    main()
