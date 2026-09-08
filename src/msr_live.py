@@ -2,23 +2,11 @@
 ST5 LIVE
 MSR STEP 5 — C4 LIVE ADAPTER
 
-C4 remains the validated MSR daily engine.
-
-This adapter:
-    - reuses C4 add_indicators()
-    - does NOT duplicate indicator formulas
-    - does NOT modify C4 trade logic
-    - sends Telegram only when a new MSR ENTRY_SIGNAL appears
-    - does not place orders
-
-IMPORTANT:
-    C4 is a DAILY strategy.
-    Therefore this adapter evaluates completed DAILY bars,
-    not 5M bars.
-
-The live infrastructure can run during the trading session,
-but a new MSR daily signal is only valid when the daily bar
-is complete according to the C4 execution model.
+- Reuses the validated C4 indicator engine.
+- Fetches MSR daily data directly from KBS.
+- Evaluates only completed daily candles.
+- Sends Telegram only for a NEW BUY signal.
+- Does not place orders.
 """
 
 from __future__ import annotations
@@ -31,6 +19,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytz
+from vnstock import Quote
 
 
 # ============================================================
@@ -44,7 +33,7 @@ if str(ROOT_DIR) not in sys.path:
 
 
 # ============================================================
-# IMPORT C4
+# C4 ENGINE
 # ============================================================
 
 from msr_step5_engine import add_indicators
@@ -54,6 +43,8 @@ from msr_step5_engine import add_indicators
 # CONFIG
 # ============================================================
 
+TICKER = "MSR"
+
 TZ = pytz.timezone(
     "Asia/Ho_Chi_Minh"
 )
@@ -62,12 +53,6 @@ STATE_FILE = (
     ROOT_DIR
     / "data"
     / "msr_live_state.json"
-)
-
-DATA_DIR = (
-    ROOT_DIR
-    / "data"
-    / "MSR"
 )
 
 
@@ -87,15 +72,11 @@ TELEGRAM_CHAT_ID = os.getenv(
 def send_telegram(message: str) -> bool:
 
     if not TELEGRAM_BOT_TOKEN:
-        print(
-            "Telegram token chưa được cấu hình."
-        )
+        print("Telegram token chưa được cấu hình.")
         return False
 
     if not TELEGRAM_CHAT_ID:
-        print(
-            "Telegram chat ID chưa được cấu hình."
-        )
+        print("Telegram chat ID chưa được cấu hình.")
         return False
 
     try:
@@ -160,10 +141,7 @@ def in_trading_session(
         <= dt_time(14, 30)
     )
 
-    return (
-        morning
-        or afternoon
-    )
+    return morning or afternoon
 
 
 # ============================================================
@@ -204,13 +182,13 @@ def save_state(state: dict):
         exist_ok=True,
     )
 
-    temp = (
+    temp_file = (
         str(STATE_FILE)
         + ".tmp"
     )
 
     with open(
-        temp,
+        temp_file,
         "w",
         encoding="utf-8",
     ) as f:
@@ -223,39 +201,60 @@ def save_state(state: dict):
         )
 
     os.replace(
-        temp,
+        temp_file,
         STATE_FILE,
     )
 
 
 # ============================================================
-# DATA
+# MSR DAILY DATA
 # ============================================================
 
-def load_msr_daily_data() -> pd.DataFrame:
+def load_msr_daily() -> pd.DataFrame:
 
-    candidates = [
-        DATA_DIR / "MSR.csv",
-        ROOT_DIR / "data" / "MSR.csv",
-        ROOT_DIR / "data" / "MSR_daily.csv",
-    ]
+    print(
+        f"Downloading {TICKER} daily data from KBS..."
+    )
 
-    selected = None
+    quote = Quote(
+        symbol=TICKER,
+        source="KBS",
+    )
 
-    for path in candidates:
+    # C4 cần lịch sử đủ dài để tính indicator.
+    # Lấy toàn bộ lịch sử thay vì chỉ vài ngày.
+    df = quote.history(
+        start="2015-01-01",
+        end=datetime.now(TZ).strftime(
+            "%Y-%m-%d"
+        ),
+        interval="1D",
+    )
 
-        if path.exists():
-            selected = path
-            break
+    if df is None or df.empty:
 
-    if selected is None:
-
-        raise FileNotFoundError(
-            "Không tìm thấy dữ liệu MSR daily."
+        raise RuntimeError(
+            "KBS không trả dữ liệu MSR."
         )
 
-    df = pd.read_csv(
-        selected
+    df.columns = [
+        str(c).strip().lower()
+        for c in df.columns
+    ]
+
+    rename = {
+        "time": "Date",
+        "datetime": "Date",
+        "date": "Date",
+        "open": "Open",
+        "high": "High",
+        "low": "Low",
+        "close": "Close",
+        "volume": "Volume",
+    }
+
+    df = df.rename(
+        columns=rename
     )
 
     required = [
@@ -268,9 +267,9 @@ def load_msr_daily_data() -> pd.DataFrame:
     ]
 
     missing = [
-        col
-        for col in required
-        if col not in df.columns
+        c
+        for c in required
+        if c not in df.columns
     ]
 
     if missing:
@@ -309,38 +308,38 @@ def load_msr_daily_data() -> pd.DataFrame:
         .reset_index(drop=True)
     )
 
+    print(
+        f"MSR rows: {len(df)}"
+    )
+
+    print(
+        f"Range: "
+        f"{df['Date'].min().date()} -> "
+        f"{df['Date'].max().date()}"
+    )
+
     return df
 
 
 # ============================================================
-# COMPLETED DAILY BAR
+# COMPLETED DAILY CANDLES
 # ============================================================
 
-def completed_daily_data(
+def get_completed_daily(
     df: pd.DataFrame,
     current: datetime,
 ) -> pd.DataFrame:
-
-    if df.empty:
-        return df
-
-    out = df.copy()
-
-    # Data provider normally gives Date as daily session date.
-    # During an active trading session, today's daily candle
-    # is still incomplete.
-    #
-    # Therefore only dates strictly before today's Vietnam date
-    # are eligible for the C4 signal.
 
     today = pd.Timestamp(
         current.date()
     )
 
-    out = out[
-        out["Date"].dt.normalize()
+    # Không sử dụng nến hôm nay vì trong phiên
+    # daily candle chưa hoàn tất.
+    out = df[
+        df["Date"].dt.normalize()
         < today
-    ]
+    ].copy()
 
     return out.reset_index(
         drop=True
@@ -354,21 +353,25 @@ def completed_daily_data(
 def calculate_c4_signal(
     df: pd.DataFrame,
     current: datetime,
-):
+) -> dict | None:
 
-    completed = completed_daily_data(
+    completed = get_completed_daily(
         df,
         current,
     )
 
     if len(completed) < 50:
 
+        print(
+            "MSR: chưa đủ dữ liệu."
+        )
+
         return None
 
     # --------------------------------------------------------
-    # IMPORTANT:
-    # C4 indicator calculation comes directly
-    # from msr_step5_engine.py
+    # QUAN TRỌNG:
+    # Indicator dùng trực tiếp từ C4.
+    # Không copy lại công thức ở đây.
     # --------------------------------------------------------
 
     data = add_indicators(
@@ -407,9 +410,9 @@ def calculate_c4_signal(
 def process_msr(
     current: datetime,
     state: dict,
-):
+) -> bool:
 
-    df = load_msr_daily_data()
+    df = load_msr_daily()
 
     signal = calculate_c4_signal(
         df,
@@ -417,11 +420,6 @@ def process_msr(
     )
 
     if signal is None:
-
-        print(
-            "MSR: chưa đủ dữ liệu."
-        )
-
         return False
 
     signal_date = pd.Timestamp(
@@ -432,32 +430,45 @@ def process_msr(
 
     print()
     print(
-        "MSR C4"
+        "========== MSR C4 =========="
     )
+
     print(
-        f"Daily bar : {signal_date}"
+        f"Daily candle : {signal_date}"
     )
+
     print(
-        f"Close     : {signal['Close']}"
+        f"Close        : "
+        f"{signal['Close']}"
     )
+
     print(
-        f"Volume R  : {signal['VOLUME_RATIO']:.4f}"
+        f"Volume Ratio : "
+        f"{signal['VOLUME_RATIO']:.4f}"
     )
+
     print(
-        f"MACD Hist : {signal['MACD_HIST']:.6f}"
+        f"MACD Hist    : "
+        f"{signal['MACD_HIST']:.6f}"
     )
+
     print(
-        f"ROC10     : {signal['ROC10']:.4f}"
+        f"ROC10        : "
+        f"{signal['ROC10']:.4f}"
     )
+
     print(
-        f"ADX14     : {signal['ADX14']:.4f}"
+        f"ADX14        : "
+        f"{signal['ADX14']:.4f}"
     )
+
     print(
-        f"ENTRY     : {signal['ENTRY_SIGNAL']}"
+        f"ENTRY_SIGNAL : "
+        f"{signal['ENTRY_SIGNAL']}"
     )
 
     # --------------------------------------------------------
-    # NO SIGNAL
+    # NO BUY
     # --------------------------------------------------------
 
     if not signal["ENTRY_SIGNAL"]:
@@ -468,14 +479,14 @@ def process_msr(
     # DEDUP
     # --------------------------------------------------------
 
-    last_signal = state.get(
+    last_signal_date = state.get(
         "last_entry_signal"
     )
 
-    if last_signal == signal_date:
+    if last_signal_date == signal_date:
 
         print(
-            "MSR: tín hiệu này đã gửi."
+            "MSR: BUY signal already sent."
         )
 
         return False
@@ -505,20 +516,19 @@ def process_msr(
     )
 
     if not sent:
-
         return False
 
     # --------------------------------------------------------
     # SAVE STATE
     # --------------------------------------------------------
 
-    state["last_entry_signal"] = (
-        signal_date
-    )
+    state[
+        "last_entry_signal"
+    ] = signal_date
 
-    state["updated_at"] = (
-        current.isoformat()
-    )
+    state[
+        "updated_at"
+    ] = current.isoformat()
 
     save_state(
         state
@@ -577,5 +587,4 @@ def main():
 
 
 if __name__ == "__main__":
-
     main()
