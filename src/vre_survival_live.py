@@ -1,48 +1,43 @@
 # ============================================================
-# VRE SURVIVAL V1.8 — BƯỚC 1
-# DAILY SIGNAL ENGINE — TECHNICAL TEST ONLY
-# ============================================================
+# VRE SURVIVAL V1.8 — LIVE ENGINE
 #
-# MỤC TIÊU:
-#   1. Lấy dữ liệu Daily từ KBS
-#   2. Tính indicator đúng luật V1.8
-#   3. Kiểm tra ENTRY / EXIT
-#   4. In trạng thái 7 mã Survivor
+# V1.8 FROZEN
 #
-# CHƯA:
-#   - Telegram
-#   - State
-#   - Paper trade
-#   - Auto order
-#   - Sửa MSR
-#   - Sửa CII
+# ENTRY:
+#   ADX14 > 40 AND MACD_HIST_SLOPE > 0
 #
-# V1.8 FROZEN:
-#   ENTRY:
-#       ADX14 > 40
-#       AND MACD_HIST_SLOPE > 0
+# EXIT:
+#   MACD_HIST <= 0
+#   OR ROC10 <= 2
+#   OR ADX14 <= 30
 #
-#   EXIT:
-#       MACD_HIST <= 0
-#       OR ROC10 <= 2
-#       OR ADX14 <= 30
+# LIVE:
+#   Daily timeframe
+#   7 CORE tickers
+#   Persistent state
+#   Signal de-duplication
+#   Telegram
 #
+# NO:
+#   TP / SL
+#   RSI
+#   Volume
+#   VNINDEX filter
+#   MA20
+#   Auto Order
+#   MSR/CII modification
 # ============================================================
 
-import sys
-import time
-from datetime import datetime
 from pathlib import Path
+from datetime import datetime, timezone
+import json
+import os
+import urllib.parse
+import urllib.request
 
 import numpy as np
 import pandas as pd
-
-try:
-    from vnstock import Quote
-except Exception as e:
-    print("ERROR: Không import được vnstock.")
-    print(e)
-    sys.exit(1)
+from vnstock import Quote
 
 
 # ============================================================
@@ -61,65 +56,123 @@ TICKERS = [
 
 SOURCE = "KBS"
 
-LOOKBACK_DAYS = 3000
+DATA_START = "2010-01-01"
 
-# V1.8 FROZEN
-ADX_ENTRY = 40.0
-ADX_EXIT = 30.0
-ROC_EXIT = 2.0
+ENTRY_ADX_MIN = 40.0
+EXIT_ADX_MIN = 30.0
+ROC10_MIN = 2.0
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+
+STATE_DIR = ROOT_DIR / "data"
+STATE_FILE = STATE_DIR / "vre_survival_state.json"
 
 
 # ============================================================
-# LOAD DAILY DATA
+# TELEGRAM
 # ============================================================
 
-def load_daily(symbol):
-    """
-    Lấy Daily OHLCV từ KBS.
+TELEGRAM_BOT_TOKEN = os.getenv(
+    "TELEGRAM_BOT_TOKEN",
+    ""
+)
 
-    Không dùng intraday.
-    Không dùng VNINDEX.
-    """
+TELEGRAM_CHAT_ID = os.getenv(
+    "TELEGRAM_CHAT_ID",
+    ""
+)
 
-    print(f"\n[{symbol}] Download Daily...")
+
+def send_telegram(message):
+
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("[TELEGRAM] Secrets not available -> skip")
+        return False
 
     try:
-        q = Quote(
-            symbol=symbol,
-            source=SOURCE
+
+        url = (
+            "https://api.telegram.org/bot"
+            + TELEGRAM_BOT_TOKEN
+            + "/sendMessage"
         )
 
-        df = q.history(
-            start="2010-01-01",
-            end=datetime.now().strftime("%Y-%m-%d"),
-            interval="1D"
+        payload = urllib.parse.urlencode({
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
+        }).encode("utf-8")
+
+        request = urllib.request.Request(
+            url,
+            data=payload,
+            method="POST"
         )
+
+        with urllib.request.urlopen(
+            request,
+            timeout=20
+        ) as response:
+
+            body = response.read().decode("utf-8")
+
+        result = json.loads(body)
+
+        if result.get("ok"):
+            print("[TELEGRAM] SENT")
+            return True
+
+        print(
+            f"[TELEGRAM] FAILED: {result}"
+        )
+        return False
 
     except Exception as e:
-        print(f"[{symbol}] ERROR DOWNLOAD: {e}")
-        return None
 
-    if df is None or len(df) == 0:
-        print(f"[{symbol}] ERROR: Không có dữ liệu.")
-        return None
+        print(
+            f"[TELEGRAM] ERROR: {e}"
+        )
+
+        return False
+
+
+# ============================================================
+# DATA NORMALIZATION
+# ============================================================
+
+def normalize_columns(df):
 
     df = df.copy()
 
-    # --------------------------------------------------------
-    # Chuẩn hóa tên cột
-    # --------------------------------------------------------
+    rename_map = {}
 
-    df.columns = [str(c).strip().lower() for c in df.columns]
+    for c in df.columns:
 
-    rename_map = {
-        "time": "date",
-        "timestamp": "date",
-        "trading_date": "date",
-    }
+        lc = str(c).lower().strip()
 
-    df = df.rename(columns=rename_map)
+        if lc in ["time", "date", "datetime"]:
+            rename_map[c] = "date"
+
+        elif lc == "open":
+            rename_map[c] = "open"
+
+        elif lc == "high":
+            rename_map[c] = "high"
+
+        elif lc == "low":
+            rename_map[c] = "low"
+
+        elif lc in ["close", "closing_price"]:
+            rename_map[c] = "close"
+
+        elif lc in ["volume", "vol"]:
+            rename_map[c] = "volume"
+
+    df = df.rename(
+        columns=rename_map
+    )
 
     required = [
+        "date",
         "open",
         "high",
         "low",
@@ -127,86 +180,74 @@ def load_daily(symbol):
         "volume",
     ]
 
-    missing = [c for c in required if c not in df.columns]
+    missing = [
+        c for c in required
+        if c not in df.columns
+    ]
 
     if missing:
-        print(f"[{symbol}] ERROR thiếu cột: {missing}")
-        print("Columns:", list(df.columns))
-        return None
-
-    # --------------------------------------------------------
-    # Date
-    # --------------------------------------------------------
-
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(
-            df["date"],
-            errors="coerce"
+        raise ValueError(
+            f"Missing columns: {missing}"
         )
-    else:
-        df["date"] = pd.RangeIndex(len(df))
 
-    # --------------------------------------------------------
-    # Numeric
-    # --------------------------------------------------------
+    df["date"] = pd.to_datetime(
+        df["date"],
+        errors="coerce"
+    )
 
-    for c in required:
+    for c in [
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    ]:
+
         df[c] = pd.to_numeric(
             df[c],
             errors="coerce"
         )
 
-    # --------------------------------------------------------
-    # Clean
-    # --------------------------------------------------------
-
     df = df.dropna(
-        subset=[
-            "date",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-        ]
+        subset=required
     )
 
-    df = df.sort_values("date")
+    df = df.sort_values(
+        "date"
+    )
+
     df = df.drop_duplicates(
-        subset=["date"],
-        keep="last"
+        "date"
     )
 
-    df = df.reset_index(drop=True)
-
-    if len(df) < 100:
-        print(
-            f"[{symbol}] WARNING: chỉ có {len(df)} rows."
-        )
+    df = df.reset_index(
+        drop=True
+    )
 
     return df
 
 
 # ============================================================
-# INDICATORS — EXACT ST5 STYLE
+# ST5 INDICATORS
 # ============================================================
 
 def calculate_indicators(df):
 
     df = df.copy()
 
-    # ========================================================
+    # --------------------------------------------------------
     # ROC10
-    # ========================================================
+    # --------------------------------------------------------
 
     df["ROC10"] = (
-        (df["close"] / df["close"].shift(10) - 1.0)
-        * 100.0
-    )
+        df["close"]
+        / df["close"].shift(10)
+        - 1
+    ) * 100.0
 
-    # ========================================================
+    # --------------------------------------------------------
     # MACD 12 / 26 / 9
-    # ========================================================
+    # --------------------------------------------------------
 
     ema12 = df["close"].ewm(
         span=12,
@@ -220,64 +261,80 @@ def calculate_indicators(df):
         min_periods=26
     ).mean()
 
-    df["MACD"] = ema12 - ema26
+    df["MACD"] = (
+        ema12 - ema26
+    )
 
-    df["MACD_SIGNAL"] = df["MACD"].ewm(
+    df["MACD_SIGNAL"] = df[
+        "MACD"
+    ].ewm(
         span=9,
         adjust=False,
         min_periods=9
     ).mean()
 
     df["MACD_HIST"] = (
-        df["MACD"] - df["MACD_SIGNAL"]
+        df["MACD"]
+        - df["MACD_SIGNAL"]
     )
 
-    # ========================================================
-    # MACD HIST SLOPE
-    # ========================================================
-
+    # Current - previous
     df["MACD_HIST_SLOPE"] = (
         df["MACD_HIST"]
         - df["MACD_HIST"].shift(1)
     )
 
-    # ========================================================
-    # ADX14 — ST5 EWM
-    # ========================================================
+    # --------------------------------------------------------
+    # ADX14 — EXACT ST5 EWM
+    # --------------------------------------------------------
 
-    prev_close = df["close"].shift(1)
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
 
-    tr1 = df["high"] - df["low"]
-    tr2 = (df["high"] - prev_close).abs()
-    tr3 = (df["low"] - prev_close).abs()
+    prev_close = close.shift(1)
+
+    tr1 = high - low
+
+    tr2 = (
+        high - prev_close
+    ).abs()
+
+    tr3 = (
+        low - prev_close
+    ).abs()
 
     df["TR"] = pd.concat(
         [tr1, tr2, tr3],
         axis=1
     ).max(axis=1)
 
-    up_move = (
-        df["high"]
-        - df["high"].shift(1)
-    )
+    up_move = high.diff()
 
-    down_move = (
-        df["low"].shift(1)
-        - df["low"]
-    )
+    down_move = -low.diff()
 
-    df["+DM"] = np.where(
-        (up_move > down_move) &
-        (up_move > 0),
+    plus_dm = np.where(
+        (up_move > down_move)
+        & (up_move > 0),
         up_move,
         0.0
     )
 
-    df["-DM"] = np.where(
-        (down_move > up_move) &
-        (down_move > 0),
+    minus_dm = np.where(
+        (down_move > up_move)
+        & (down_move > 0),
         down_move,
         0.0
+    )
+
+    plus_dm = pd.Series(
+        plus_dm,
+        index=df.index
+    )
+
+    minus_dm = pd.Series(
+        minus_dm,
+        index=df.index
     )
 
     atr = df["TR"].ewm(
@@ -286,58 +343,40 @@ def calculate_indicators(df):
         min_periods=14
     ).mean()
 
-    plus_dm = pd.Series(
-        df["+DM"],
-        index=df.index
-    ).ewm(
-        alpha=1 / 14,
-        adjust=False,
-        min_periods=14
-    ).mean()
-
-    minus_dm = pd.Series(
-        df["-DM"],
-        index=df.index
-    ).ewm(
-        alpha=1 / 14,
-        adjust=False,
-        min_periods=14
-    ).mean()
-
-    df["+DI14"] = (
+    plus_di = (
         100.0
-        * plus_dm
+        * plus_dm.ewm(
+            alpha=1 / 14,
+            adjust=False,
+            min_periods=14
+        ).mean()
         / atr
     )
 
-    df["-DI14"] = (
+    minus_di = (
         100.0
-        * minus_dm
+        * minus_dm.ewm(
+            alpha=1 / 14,
+            adjust=False,
+            min_periods=14
+        ).mean()
         / atr
     )
 
-    di_sum = (
-        df["+DI14"]
-        + df["-DI14"]
+    denominator = (
+        plus_di + minus_di
     )
 
-    df["DX14"] = np.where(
-        di_sum != 0,
+    dx = (
         100.0
-        * (
-            (
-                df["+DI14"]
-                - df["-DI14"]
-            ).abs()
-            / di_sum
-        ),
-        np.nan
+        * (plus_di - minus_di).abs()
+        / denominator.replace(
+            0,
+            np.nan
+        )
     )
 
-    df["ADX14"] = pd.Series(
-        df["DX14"],
-        index=df.index
-    ).ewm(
+    df["ADX14"] = dx.ewm(
         alpha=1 / 14,
         adjust=False,
         min_periods=14
@@ -347,60 +386,412 @@ def calculate_indicators(df):
 
 
 # ============================================================
-# V1.8 SIGNAL
+# V1.8 DECISION
 # ============================================================
 
-def evaluate_signal(df):
+def evaluate_v18(row):
 
-    row = df.iloc[-1]
+    adx = float(row["ADX14"])
+    hist = float(row["MACD_HIST"])
+    slope = float(row["MACD_HIST_SLOPE"])
+    roc10 = float(row["ROC10"])
 
-    adx = row["ADX14"]
-    macd_hist = row["MACD_HIST"]
-    macd_slope = row["MACD_HIST_SLOPE"]
-    roc10 = row["ROC10"]
+    # EXIT
+    if (
+        hist <= 0
+        or roc10 <= ROC10_MIN
+        or adx <= EXIT_ADX_MIN
+    ):
+        return "EXIT"
 
-    entry = (
-        pd.notna(adx)
-        and pd.notna(macd_slope)
-        and adx > ADX_ENTRY
-        and macd_slope > 0
-    )
+    # ENTRY
+    if (
+        adx > ENTRY_ADX_MIN
+        and slope > 0
+    ):
+        return "BUY"
 
-    exit_signal = (
-        (
-            pd.notna(macd_hist)
-            and macd_hist <= 0
-        )
-        or
-        (
-            pd.notna(roc10)
-            and roc10 <= ROC_EXIT
-        )
-        or
-        (
-            pd.notna(adx)
-            and adx <= ADX_EXIT
-        )
-    )
+    return "HOLD"
 
-    if entry:
-        decision = "ENTRY"
 
-    elif exit_signal:
-        decision = "EXIT"
+# ============================================================
+# STATE
+# ============================================================
 
-    else:
-        decision = "HOLD"
+def default_state():
 
     return {
-        "ENTRY": bool(entry),
-        "EXIT": bool(exit_signal),
-        "DECISION": decision,
-        "ADX14": adx,
-        "MACD_HIST": macd_hist,
-        "MACD_HIST_SLOPE": macd_slope,
-        "ROC10": roc10,
+        "version": "V1.8",
+        "updated_at": None,
+        "tickers": {}
     }
+
+
+def load_state():
+
+    if not STATE_FILE.exists():
+
+        print(
+            "[STATE] No existing state -> create new"
+        )
+
+        return default_state()
+
+    try:
+
+        with open(
+            STATE_FILE,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
+            state = json.load(f)
+
+        if not isinstance(
+            state,
+            dict
+        ):
+
+            raise ValueError(
+                "Invalid state format"
+            )
+
+        if "tickers" not in state:
+            state["tickers"] = {}
+
+        return state
+
+    except Exception as e:
+
+        print(
+            f"[STATE] Load error: {e}"
+        )
+
+        return default_state()
+
+
+def save_state(state):
+
+    STATE_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    tmp_file = STATE_FILE.with_suffix(
+        ".tmp"
+    )
+
+    with open(
+        tmp_file,
+        "w",
+        encoding="utf-8"
+    ) as f:
+
+        json.dump(
+            state,
+            f,
+            ensure_ascii=False,
+            indent=2
+        )
+
+    tmp_file.replace(
+        STATE_FILE
+    )
+
+    print(
+        f"[STATE] Saved: {STATE_FILE}"
+    )
+
+
+# ============================================================
+# DAILY DATA
+# ============================================================
+
+def download_daily(ticker):
+
+    print()
+    print(
+        f"[{ticker}] Download Daily..."
+    )
+
+    quote = Quote(
+        symbol=ticker,
+        source=SOURCE
+    )
+
+    df = quote.history(
+        start=DATA_START,
+        end=datetime.now().strftime(
+            "%Y-%m-%d"
+        ),
+        interval="1D"
+    )
+
+    if df is None or len(df) == 0:
+
+        raise ValueError(
+            f"{ticker}: empty data"
+        )
+
+    df = normalize_columns(df)
+
+    df = calculate_indicators(df)
+
+    return df
+
+
+# ============================================================
+# PROCESS TICKER
+# ============================================================
+
+def process_ticker(
+    ticker,
+    state
+):
+
+    df = download_daily(
+        ticker
+    )
+
+    valid = df.dropna(
+        subset=[
+            "ROC10",
+            "MACD_HIST",
+            "MACD_HIST_SLOPE",
+            "ADX14",
+        ]
+    )
+
+    if len(valid) == 0:
+
+        raise ValueError(
+            f"{ticker}: no valid indicator rows"
+        )
+
+    row = valid.iloc[-1]
+
+    decision = evaluate_v18(
+        row
+    )
+
+    last_date = row["date"]
+
+    if hasattr(
+        last_date,
+        "isoformat"
+    ):
+
+        last_date_str = (
+            last_date.isoformat()
+        )
+
+    else:
+
+        last_date_str = str(
+            last_date
+        )
+
+    old = state[
+        "tickers"
+    ].get(
+        ticker,
+        {}
+    )
+
+    old_position = bool(
+        old.get(
+            "position",
+            False
+        )
+    )
+
+    old_decision = old.get(
+        "decision"
+    )
+
+    # --------------------------------------------------------
+    # REAL SIGNAL LOGIC
+    #
+    # BUY only when:
+    #   current BUY
+    #   AND currently not holding
+    #
+    # EXIT only when:
+    #   current EXIT
+    #   AND currently holding
+    #
+    # HOLD = no signal
+    # --------------------------------------------------------
+
+    signal = None
+
+    if (
+        decision == "BUY"
+        and not old_position
+    ):
+
+        signal = "BUY"
+
+    elif (
+        decision == "EXIT"
+        and old_position
+    ):
+
+        signal = "SELL"
+
+    # --------------------------------------------------------
+    # Update position state
+    # --------------------------------------------------------
+
+    new_position = old_position
+
+    if signal == "BUY":
+        new_position = True
+
+    elif signal == "SELL":
+        new_position = False
+
+    # --------------------------------------------------------
+    # Save ticker state
+    # --------------------------------------------------------
+
+    ticker_state = {
+
+        "last_date":
+            last_date_str,
+
+        "close":
+            float(row["close"]),
+
+        "adx14":
+            float(row["ADX14"]),
+
+        "macd_hist":
+            float(row["MACD_HIST"]),
+
+        "macd_hist_slope":
+            float(
+                row["MACD_HIST_SLOPE"]
+            ),
+
+        "roc10":
+            float(row["ROC10"]),
+
+        "decision":
+            decision,
+
+        "previous_decision":
+            old_decision,
+
+        "position":
+            bool(new_position),
+
+        "signal":
+            signal,
+
+        "updated_at":
+            datetime.now(
+                timezone.utc
+            ).isoformat(),
+    }
+
+    state[
+        "tickers"
+    ][ticker] = ticker_state
+
+    # --------------------------------------------------------
+    # PRINT
+    # --------------------------------------------------------
+
+    print()
+    print("-" * 78)
+    print(ticker)
+
+    print(
+        f"Last date : {last_date_str}"
+    )
+
+    print(
+        f"Close     : {row['close']:.4f}"
+    )
+
+    print(
+        f"ADX14     : {row['ADX14']:.4f}"
+    )
+
+    print(
+        f"MACD_HIST : {row['MACD_HIST']:.6f}"
+    )
+
+    print(
+        f"HIST_SLOPE: {row['MACD_HIST_SLOPE']:.6f}"
+    )
+
+    print(
+        f"ROC10     : {row['ROC10']:.4f}"
+    )
+
+    print(
+        f"PREVIOUS  : {old_decision}"
+    )
+
+    print(
+        f"POSITION  : {old_position}"
+    )
+
+    print(
+        f"DECISION  : {decision}"
+    )
+
+    print(
+        f"SIGNAL    : {signal}"
+    )
+
+    print(
+        f"NEW POS   : {new_position}"
+    )
+
+    return ticker_state
+
+
+# ============================================================
+# TELEGRAM MESSAGE
+# ============================================================
+
+def build_signal_message(
+    ticker,
+    result
+):
+
+    signal = result["signal"]
+
+    if signal == "BUY":
+
+        title = "🟢 VRE SURVIVAL — BUY"
+
+    elif signal == "SELL":
+
+        title = "🔴 VRE SURVIVAL — SELL"
+
+    else:
+
+        return None
+
+    return (
+        f"{title}\n"
+        f"\n"
+        f"Mã: {ticker}\n"
+        f"Ngày: {result['last_date']}\n"
+        f"Giá: {result['close']:.4f}\n"
+        f"\n"
+        f"ADX14: {result['adx14']:.4f}\n"
+        f"MACD Hist: {result['macd_hist']:.6f}\n"
+        f"Hist Slope: {result['macd_hist_slope']:.6f}\n"
+        f"ROC10: {result['roc10']:.4f}\n"
+        f"\n"
+        f"VRE Survival V1.8\n"
+        f"Daily Signal"
+    )
 
 
 # ============================================================
@@ -410,125 +801,175 @@ def evaluate_signal(df):
 def main():
 
     print("=" * 78)
-    print("VRE SURVIVAL V1.8 — BƯỚC 1")
-    print("DAILY SIGNAL ENGINE — TECHNICAL TEST")
+    print(
+        "VRE SURVIVAL V1.8 — LIVE ENGINE"
+    )
     print("=" * 78)
 
-    print("\nFROZEN RULE:")
-    print("ENTRY = ADX14 > 40 AND MACD_HIST_SLOPE > 0")
-    print("EXIT  = MACD_HIST <= 0 OR ROC10 <= 2 OR ADX14 <= 30")
+    print(
+        f"State file : {STATE_FILE}"
+    )
+
+    print(
+        f"Tickers    : {', '.join(TICKERS)}"
+    )
+
+    print(
+        "Timeframe  : DAILY"
+    )
+
+    print(
+        "Source     : KBS"
+    )
+
+    print()
+
+    state = load_state()
+
+    state["version"] = "V1.8"
+
+    success = 0
+    failed = 0
 
     results = []
 
-    for symbol in TICKERS:
+    # --------------------------------------------------------
+    # PROCESS ALL TICKERS
+    # --------------------------------------------------------
 
-        df = load_daily(symbol)
-
-        if df is None:
-            results.append({
-                "Ticker": symbol,
-                "Status": "DOWNLOAD_ERROR"
-            })
-            continue
+    for ticker in TICKERS:
 
         try:
-            df = calculate_indicators(df)
 
-            signal = evaluate_signal(df)
-
-            last = df.iloc[-1]
-
-            last_date = last["date"]
-
-            print("\n" + "-" * 78)
-            print(f"{symbol}")
-            print(f"Last date : {last_date}")
-            print(f"Close     : {last['close']:.4f}")
-            print(f"ADX14     : {signal['ADX14']:.4f}")
-            print(f"MACD_HIST : {signal['MACD_HIST']:.6f}")
-            print(
-                f"HIST_SLOPE: "
-                f"{signal['MACD_HIST_SLOPE']:.6f}"
+            result = process_ticker(
+                ticker,
+                state
             )
-            print(f"ROC10     : {signal['ROC10']:.4f}")
-            print(f"DECISION  : {signal['DECISION']}")
 
-            results.append({
-                "Ticker": symbol,
-                "LastDate": last_date,
-                "Close": last["close"],
-                "ADX14": signal["ADX14"],
-                "MACD_HIST": signal["MACD_HIST"],
-                "MACD_HIST_SLOPE": signal["MACD_HIST_SLOPE"],
-                "ROC10": signal["ROC10"],
-                "ENTRY": signal["ENTRY"],
-                "EXIT": signal["EXIT"],
-                "DECISION": signal["DECISION"],
-                "Rows": len(df),
-                "Status": "OK",
-            })
+            results.append(
+                (ticker, result)
+            )
+
+            success += 1
 
         except Exception as e:
 
+            failed += 1
+
+            print()
             print(
-                f"[{symbol}] ERROR INDICATOR: {e}"
+                f"[ERROR] {ticker}: {e}"
             )
 
-            results.append({
-                "Ticker": symbol,
-                "Status": "INDICATOR_ERROR",
-                "Error": str(e),
-            })
+    # --------------------------------------------------------
+    # SEND TELEGRAM
+    # --------------------------------------------------------
 
-        # Tránh gọi KBS quá dồn
-        time.sleep(1.0)
-
-    # ========================================================
-    # SUMMARY
-    # ========================================================
-
-    result_df = pd.DataFrame(results)
-
-    print("\n")
+    print()
     print("=" * 78)
-    print("VRE SURVIVAL V1.8 — STEP 1 SUMMARY")
+    print("TELEGRAM SIGNALS")
     print("=" * 78)
 
-    if len(result_df):
+    telegram_count = 0
 
-        display_cols = [
-            "Ticker",
-            "LastDate",
-            "Close",
-            "ADX14",
-            "MACD_HIST",
-            "MACD_HIST_SLOPE",
-            "ROC10",
-            "DECISION",
-            "Rows",
-            "Status",
-        ]
+    for ticker, result in results:
 
-        existing = [
-            c for c in display_cols
-            if c in result_df.columns
-        ]
-
-        print(
-            result_df[existing].to_string(
-                index=False
-            )
+        message = build_signal_message(
+            ticker,
+            result
         )
 
-    print("\n" + "=" * 78)
-    print("STEP 1 FINISHED")
+        if message is None:
+
+            print(
+                f"{ticker}: NO SIGNAL"
+            )
+
+            continue
+
+        print(
+            f"{ticker}: {result['signal']}"
+        )
+
+        sent = send_telegram(
+            message
+        )
+
+        if sent:
+            telegram_count += 1
+
+    # --------------------------------------------------------
+    # UPDATE GLOBAL STATE
+    # --------------------------------------------------------
+
+    state["updated_at"] = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    save_state(
+        state
+    )
+
+    # --------------------------------------------------------
+    # SUMMARY
+    # --------------------------------------------------------
+
+    print()
     print("=" * 78)
-    print("Chưa gửi Telegram.")
-    print("Chưa tạo state.")
-    print("Chưa paper trade.")
-    print("Chưa sửa MSR/CII.")
+    print(
+        "VRE SURVIVAL V1.8 — SUMMARY"
+    )
+    print("=" * 78)
+
+    print(
+        f"{'Ticker':<8}"
+        f"{'Decision':<10}"
+        f"{'Position':<10}"
+        f"{'Signal':<10}"
+        f"{'Status'}"
+    )
+
+    for ticker, result in results:
+
+        signal_text = (
+            result["signal"]
+            if result["signal"]
+            else "-"
+        )
+
+        print(
+            f"{ticker:<8}"
+            f"{result['decision']:<10}"
+            f"{str(result['position']):<10}"
+            f"{signal_text:<10}"
+            f"OK"
+        )
+
+    print()
+    print(
+        f"Success          : {success}"
+    )
+
+    print(
+        f"Failed           : {failed}"
+    )
+
+    print(
+        f"Telegram signals : {telegram_count}"
+    )
+
+    print()
+    print(
+        f"State file: {STATE_FILE}"
+    )
+
+    print()
+    print("=" * 78)
+    print(
+        "VRE SURVIVAL V1.8 FINISHED"
+    )
     print("=" * 78)
 
 
 if __name__ == "__main__":
-    main() 
+    main()
