@@ -2,11 +2,21 @@
 ST5 LIVE
 MSR STEP 5 — C4 LIVE ADAPTER
 
-- Reuses the validated C4 indicator engine.
-- Fetches MSR daily data directly from KBS.
-- Evaluates only completed daily candles.
-- Sends Telegram only for a NEW BUY signal.
-- Does not place orders.
+LIVE MODE
+
+Historical C4 engine remains unchanged.
+
+During live trading:
+    - Use the current trading day's developing daily candle.
+    - Reuse the exact C4 indicator calculation.
+    - Evaluate ENTRY_SIGNAL on the latest available candle.
+    - Send BUY only once per trading day.
+    - Never send SELL.
+    - Never place an order.
+
+Trading sessions:
+    09:15 - 11:30
+    13:00 - 14:30
 """
 
 from __future__ import annotations
@@ -72,11 +82,15 @@ TELEGRAM_CHAT_ID = os.getenv(
 def send_telegram(message: str) -> bool:
 
     if not TELEGRAM_BOT_TOKEN:
-        print("Telegram token chưa được cấu hình.")
+        print(
+            "Telegram token chưa được cấu hình."
+        )
         return False
 
     if not TELEGRAM_CHAT_ID:
-        print("Telegram chat ID chưa được cấu hình.")
+        print(
+            "Telegram chat ID chưa được cấu hình."
+        )
         return False
 
     try:
@@ -141,7 +155,10 @@ def in_trading_session(
         <= dt_time(14, 30)
     )
 
-    return morning or afternoon
+    return (
+        morning
+        or afternoon
+    )
 
 
 # ============================================================
@@ -175,7 +192,9 @@ def load_state() -> dict:
     return {}
 
 
-def save_state(state: dict):
+def save_state(
+    state: dict,
+):
 
     STATE_FILE.parent.mkdir(
         parents=True,
@@ -207,13 +226,13 @@ def save_state(state: dict):
 
 
 # ============================================================
-# MSR DAILY DATA
+# DOWNLOAD MSR DAILY DATA
 # ============================================================
 
 def load_msr_daily() -> pd.DataFrame:
 
     print(
-        f"Downloading {TICKER} daily data from KBS..."
+        "Downloading MSR daily data from KBS..."
     )
 
     quote = Quote(
@@ -221,8 +240,6 @@ def load_msr_daily() -> pd.DataFrame:
         source="KBS",
     )
 
-    # C4 cần lịch sử đủ dài để tính indicator.
-    # Lấy toàn bộ lịch sử thay vì chỉ vài ngày.
     df = quote.history(
         start="2015-01-01",
         end=datetime.now(TZ).strftime(
@@ -313,19 +330,18 @@ def load_msr_daily() -> pd.DataFrame:
     )
 
     print(
-        f"Range: "
-        f"{df['Date'].min().date()} -> "
-        f"{df['Date'].max().date()}"
+        f"Latest bar: "
+        f"{df['Date'].iloc[-1]}"
     )
 
     return df
 
 
 # ============================================================
-# COMPLETED DAILY CANDLES
+# NORMALIZE TODAY'S DEVELOPING DAILY BAR
 # ============================================================
 
-def get_completed_daily(
+def prepare_live_daily(
     df: pd.DataFrame,
     current: datetime,
 ) -> pd.DataFrame:
@@ -334,12 +350,38 @@ def get_completed_daily(
         current.date()
     )
 
-    # Không sử dụng nến hôm nay vì trong phiên
-    # daily candle chưa hoàn tất.
-    out = df[
-        df["Date"].dt.normalize()
-        < today
-    ].copy()
+    out = df.copy()
+
+    # --------------------------------------------------------
+    # If KBS already contains today's developing daily bar,
+    # use it directly.
+    # --------------------------------------------------------
+
+    today_rows = out[
+        out["Date"].dt.normalize()
+        == today
+    ]
+
+    if not today_rows.empty:
+
+        print(
+            "Today's developing MSR daily candle found."
+        )
+
+        return out.reset_index(
+            drop=True
+        )
+
+    # --------------------------------------------------------
+    # If provider does not return today's daily candle,
+    # we cannot manufacture a daily candle from nowhere.
+    # Keep historical data only.
+    # --------------------------------------------------------
+
+    print(
+        "Today's developing daily candle "
+        "is not available from KBS."
+    )
 
     return out.reset_index(
         drop=True
@@ -347,41 +389,44 @@ def get_completed_daily(
 
 
 # ============================================================
-# C4 SIGNAL
+# C4 LIVE SIGNAL
 # ============================================================
 
-def calculate_c4_signal(
+def calculate_live_signal(
     df: pd.DataFrame,
     current: datetime,
 ) -> dict | None:
 
-    completed = get_completed_daily(
+    data = prepare_live_daily(
         df,
         current,
     )
 
-    if len(completed) < 50:
+    if len(data) < 50:
 
         print(
-            "MSR: chưa đủ dữ liệu."
+            "MSR: insufficient history."
         )
 
         return None
 
     # --------------------------------------------------------
-    # QUAN TRỌNG:
-    # Indicator dùng trực tiếp từ C4.
-    # Không copy lại công thức ở đây.
+    # IMPORTANT:
+    # Indicator formulas come directly from C4.
     # --------------------------------------------------------
 
     data = add_indicators(
-        completed
+        data
     )
 
     latest = data.iloc[-1]
 
+    latest_date = pd.Timestamp(
+        latest["Date"]
+    )
+
     return {
-        "Date": latest["Date"],
+        "Date": latest_date,
         "Close": float(
             latest["Close"]
         ),
@@ -404,7 +449,7 @@ def calculate_c4_signal(
 
 
 # ============================================================
-# PROCESS
+# PROCESS MSR
 # ============================================================
 
 def process_msr(
@@ -414,7 +459,7 @@ def process_msr(
 
     df = load_msr_daily()
 
-    signal = calculate_c4_signal(
+    signal = calculate_live_signal(
         df,
         current,
     )
@@ -430,11 +475,11 @@ def process_msr(
 
     print()
     print(
-        "========== MSR C4 =========="
+        "========== MSR C4 LIVE =========="
     )
 
     print(
-        f"Daily candle : {signal_date}"
+        f"Candle date  : {signal_date}"
     )
 
     print(
@@ -476,17 +521,33 @@ def process_msr(
         return False
 
     # --------------------------------------------------------
-    # DEDUP
+    # ONLY ACCEPT CURRENT TRADING DAY
+    # --------------------------------------------------------
+
+    today = current.strftime(
+        "%Y-%m-%d"
+    )
+
+    if signal_date != today:
+
+        print(
+            "MSR: signal belongs to an old candle."
+        )
+
+        return False
+
+    # --------------------------------------------------------
+    # ONE TELEGRAM BUY PER DAY
     # --------------------------------------------------------
 
     last_signal_date = state.get(
         "last_entry_signal"
     )
 
-    if last_signal_date == signal_date:
+    if last_signal_date == today:
 
         print(
-            "MSR: BUY signal already sent."
+            "MSR: today's BUY already sent."
         )
 
         return False
@@ -497,7 +558,7 @@ def process_msr(
 
     message = (
         "🚨 ST5 LIVE — MSR C4 BUY\n\n"
-        f"Date: {signal_date}\n"
+        f"Date: {today}\n"
         f"Close: {signal['Close']}\n\n"
         f"Volume Ratio: "
         f"{signal['VOLUME_RATIO']:.4f}\n"
@@ -507,7 +568,7 @@ def process_msr(
         f"{signal['ROC10']:.4f}\n"
         f"ADX14: "
         f"{signal['ADX14']:.4f}\n\n"
-        "C4 ENTRY: PASS\n"
+        "C4 ENTRY: 4/4 CONDITIONS PASS\n"
         "⚠️ Paper signal — chưa tự đặt lệnh."
     )
 
@@ -524,7 +585,7 @@ def process_msr(
 
     state[
         "last_entry_signal"
-    ] = signal_date
+    ] = today
 
     state[
         "updated_at"
@@ -535,7 +596,7 @@ def process_msr(
     )
 
     print(
-        "✅ MSR C4 BUY đã gửi Telegram."
+        "✅ MSR C4 BUY sent to Telegram."
     )
 
     return True
@@ -551,7 +612,7 @@ def main():
 
     print()
     print("=" * 70)
-    print("ST5 LIVE — MSR C4")
+    print("ST5 LIVE — MSR C4 LIVE")
     print("=" * 70)
 
     print(
@@ -587,4 +648,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
