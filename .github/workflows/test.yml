@@ -105,9 +105,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           PYTHONPATH=src python src/v11_daily_engine.py
-      - name: Run VRE Survival V1.8 — Step 1
-        run: |
-          PYTHONPATH=src python src/vre_survival_live.py
+          
       # =====================================================
       # SHOW MSR STATE
       # =====================================================
