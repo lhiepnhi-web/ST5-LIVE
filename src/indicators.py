@@ -3,27 +3,14 @@ import pandas as pd
 
 
 def volume_ratio(df, period=20):
-    """
-    Volume Ratio = Volume / SMA(Volume, 20)
-    """
-    return (
-        df["Volume"]
-        / df["Volume"].rolling(period).mean()
-    )
+    return df["Volume"] / df["Volume"].rolling(period).mean()
 
 
 def roc10(df):
-    """
-    ROC10 = % thay đổi giá đóng cửa sau 10 nến.
-    """
     return df["Close"].pct_change(10) * 100.0
 
 
 def macd_histogram(df):
-    """
-    MACD Histogram:
-    EMA12 - EMA26 - Signal(EMA9)
-    """
     ema12 = df["Close"].ewm(
         span=12,
         adjust=False
@@ -45,10 +32,6 @@ def macd_histogram(df):
 
 
 def adx14(df, period=14):
-    """
-    ADX14 sử dụng EWM alpha = 1/14,
-    giữ cùng phương pháp V1.4.
-    """
 
     high = df["High"]
     low = df["Low"]
@@ -70,14 +53,8 @@ def adx14(df, period=14):
     )
 
     tr1 = high - low
-
-    tr2 = (
-        high - close.shift()
-    ).abs()
-
-    tr3 = (
-        low - close.shift()
-    ).abs()
+    tr2 = (high - close.shift()).abs()
+    tr3 = (low - close.shift()).abs()
 
     tr = pd.concat(
         [tr1, tr2, tr3],
@@ -117,13 +94,13 @@ def adx14(df, period=14):
         * 100
     )
 
-    denominator = (
-        plus_di + minus_di
-    ).replace(0, np.nan)
-
     dx = (
         (plus_di - minus_di).abs()
-        / denominator
+        /
+        (plus_di + minus_di).replace(
+            0,
+            np.nan
+        )
         * 100
     )
 
@@ -134,27 +111,6 @@ def adx14(df, period=14):
 
 
 def add_v14_indicators(df):
-    """
-    Thêm toàn bộ indicator V1.4.
-    """
-
-    required = [
-        "Open",
-        "High",
-        "Low",
-        "Close",
-        "Volume"
-    ]
-
-    missing = [
-        col for col in required
-        if col not in df.columns
-    ]
-
-    if missing:
-        raise ValueError(
-            f"Thiếu cột dữ liệu: {missing}"
-        )
 
     df = df.copy()
 
@@ -163,39 +119,4 @@ def add_v14_indicators(df):
     df["MACD_Hist"] = macd_histogram(df)
     df["ADX14"] = adx14(df)
 
-    return df
-
-
-def v14_signal(df):
-    """
-    V1.4:
-
-    Volume Ratio > 1.5
-    ROC10 > 4
-    MACD Histogram > 0
-    ADX14 > 30
-    """
-
-    required = [
-        "VolumeRatio",
-        "ROC10",
-        "MACD_Hist",
-        "ADX14"
-    ]
-
-    missing = [
-        col for col in required
-        if col not in df.columns
-    ]
-
-    if missing:
-        raise ValueError(
-            f"Thiếu indicator: {missing}"
-        )
-
-    return (
-        (df["VolumeRatio"] > 1.5)
-        & (df["ROC10"] > 4.0)
-        & (df["MACD_Hist"] > 0.0)
-        & (df["ADX14"] > 30.0)
-  )
+    return df 
