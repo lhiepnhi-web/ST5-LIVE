@@ -1,6 +1,6 @@
 # ============================================================
 # BSR EMPIRE — 33 CHIẾN BINH DAILY ENGINE
-# Chạy song song với V1.1 CII
+# Hệ thống thứ 4 — chạy song song với MSR, CII, VRE
 # ============================================================
 
 import os
@@ -164,21 +164,17 @@ def wilder_rma(series, period=14):
 def add_indicators(df):
     df = df.copy()
 
-    # Volume Ratio
     volume_ma20 = df["Volume"].rolling(20, min_periods=20).mean()
     df["VolumeRatio"] = df["Volume"] / volume_ma20
 
-    # MACD Histogram
     ema12 = df["Close"].ewm(span=12, adjust=False).mean()
     ema26 = df["Close"].ewm(span=26, adjust=False).mean()
     macd = ema12 - ema26
     macd_signal = macd.ewm(span=9, adjust=False).mean()
     df["MACD_Hist"] = macd - macd_signal
 
-    # ROC10
     df["ROC10"] = df["Close"].pct_change(10) * 100
 
-    # ADX14 Wilder
     high = df["High"]
     low = df["Low"]
     close = df["Close"]
@@ -307,7 +303,6 @@ def process_ticker(ticker, state):
     print(f"ROC10       : {latest['ROC10']:.4f} {'✅' if latest['ROC10'] > 2 else '❌'}")
     print(f"ADX14       : {latest['ADX14']:.4f} {'✅' if latest['ADX14'] > 30 else '❌'}")
 
-    # State
     ticker_state = state.get(ticker, {})
     if not isinstance(ticker_state, dict):
         ticker_state = {}
@@ -317,7 +312,7 @@ def process_ticker(ticker, state):
     last_event = ticker_state.get("last_event")
     last_event_date = ticker_state.get("last_event_date")
 
-    # CASE 1 — BUY
+    # BUY
     if not in_position:
         if not entry_now:
             print("→ WAIT")
@@ -344,7 +339,7 @@ def process_ticker(ticker, state):
         print("✅ BUY:", event_key)
         return True
 
-    # CASE 2 — EXIT
+    # EXIT
     if entry_date is None:
         print("⚠️ State thiếu entry_date")
         return False
