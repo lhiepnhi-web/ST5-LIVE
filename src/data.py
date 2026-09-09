@@ -3,6 +3,12 @@ from vnstock import Quote
 
 
 def get_5m_data(ticker, days=30):
+    """
+    Lấy dữ liệu 5 phút gần nhất.
+
+    ticker: mã cổ phiếu
+    days: số ngày lịch sử yêu cầu
+    """
 
     end = pd.Timestamp.now()
     start = end - pd.Timedelta(days=days)
@@ -48,11 +54,15 @@ def get_5m_data(ticker, days=30):
         "Volume"
     ]
 
-    for col in required:
-        if col not in df.columns:
-            raise ValueError(
-                f"{ticker}: thiếu cột {col}"
-            )
+    missing = [
+        col for col in required
+        if col not in df.columns
+    ]
+
+    if missing:
+        raise ValueError(
+            f"{ticker}: thiếu cột {missing}"
+        )
 
     df["Date"] = pd.to_datetime(
         df["Date"],
@@ -75,4 +85,4 @@ def get_5m_data(ticker, days=30):
         subset=["Date"]
     )
 
-    return df.reset_index(drop=True) 
+    return df.reset_index(drop=True)
